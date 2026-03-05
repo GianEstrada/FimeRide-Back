@@ -1,0 +1,25 @@
+# Python Virtual Environments
+venv/
+env/
+
+# Environment Variables (Crucial for security!)
+.env
+.env.local
+
+# Python Cache & Bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Django specific
+*.log
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+media/
+staticfiles/
+
+# IDE / Editor folders
+.vscode/
+.idea/
+*.swp
