@@ -97,9 +97,22 @@ class Viaje(models.Model):
     descripcion = models.TextField()  # Descripción del viaje
     asientos_disponibles = models.PositiveIntegerField()  # Número de asientos disponibles
     costo = models.DecimalField(max_digits=10, decimal_places=2)  # Costo del viaje
+    direccion_inicio = models.CharField(max_length=255, blank=True, default='')
+    direccion_destino = models.CharField(max_length=255, blank=True, default='')
+    origen_lat = models.FloatField(null=True, blank=True)
+    origen_lng = models.FloatField(null=True, blank=True)
+    destino_lat = models.FloatField(null=True, blank=True)
+    destino_lng = models.FloatField(null=True, blank=True)
+    modelo_vehiculo = models.CharField(max_length=120, blank=True, default='')
+    placas_vehiculo = models.CharField(max_length=30, blank=True, default='')
     fecha_viaje = models.DateField()  # Fecha del viaje
     fecha_ofrecido = models.DateTimeField(auto_now_add=True)  # Fecha en la que se ofreció el viaje
     activo = models.BooleanField(default=True)  # Indica si el viaje está activo
+    confirmado_por_conductor = models.BooleanField(default=False)
+    confirmado_en = models.DateTimeField(null=True, blank=True)
+    iniciado = models.BooleanField(default=False)
+    inicio_real = models.DateTimeField(null=True, blank=True)
+    gracia_adicional_hasta = models.DateTimeField(null=True, blank=True)
     conductor = models.ForeignKey(
         UsuarioConductor, on_delete=models.CASCADE, related_name="viajes"
     )  # Relación con el conductor que ofreció el viaje
@@ -114,6 +127,8 @@ class Asignacion(models.Model):
     conductor = models.ForeignKey(UsuarioConductor, on_delete=models.CASCADE, related_name='asignaciones')
     asignado = models.BooleanField(default=False)  # Estado de la asignación
     activo = models.BooleanField(default=True)  # Si la solicitud sigue activa
+    abordo_confirmado = models.BooleanField(default=False)
+    abordo_confirmado_en = models.DateTimeField(null=True, blank=True)
     fecha_creacion = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):

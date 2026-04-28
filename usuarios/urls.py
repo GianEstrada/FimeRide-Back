@@ -2,7 +2,7 @@ from xml.etree.ElementInclude import include
 from django.urls import path
 from rest_framework_simplejwt.views import TokenObtainPairView
 
-from .views import actualizar_asignacion, crear_asignacion, enviar_mensaje, obtener_asignaciones_conductor, obtener_chat, obtener_estado_conductor, obtener_info_usuario, obtener_mensajes_activos, obtener_token, obtener_viajes_realizados_conductor, obtener_viajes_realizados_pasajero, registrar_usuario, registrar_conductor, login_usuario,registrar_viaje,obtener_viajes
+from .views import accion_viaje_conductor, actualizar_asignacion, confirmar_abordo_pasajero, crear_asignacion, enviar_mensaje, obtener_asignaciones_conductor, obtener_chat, obtener_estado_conductor, obtener_info_usuario, obtener_mensajes_activos, obtener_recordatorio_conductor, obtener_recordatorio_pasajero, obtener_token, obtener_viajes_realizados_conductor, obtener_viajes_realizados_pasajero, registrar_usuario, registrar_conductor, login_usuario,registrar_viaje,obtener_viajes
 from usuarios import views
 
 urlpatterns = [
@@ -17,6 +17,10 @@ urlpatterns = [
     path('asignaciones/', crear_asignacion, name='crear_asignacion'),
     path('asignaciones/conductor/<int:conductor_id>/', obtener_asignaciones_conductor, name='obtener_asignaciones_conductor'),
     path('asignaciones/<int:asignacion_id>/', actualizar_asignacion, name='actualizar_asignacion'),
+    path('asignaciones/<int:asignacion_id>/abordo/', confirmar_abordo_pasajero, name='confirmar_abordo_pasajero'),
+    path('recordatorios/conductor/<int:conductor_id>/', obtener_recordatorio_conductor, name='obtener_recordatorio_conductor'),
+    path('recordatorios/pasajero/<int:pasajero_id>/', obtener_recordatorio_pasajero, name='obtener_recordatorio_pasajero'),
+    path('viajes/<int:viaje_id>/accion_conductor/', accion_viaje_conductor, name='accion_viaje_conductor'),
     path('usuario/<int:usuario_id>/', obtener_info_usuario, name='obtener_info_usuario'),
     path('viajes_realizados/pasajero/<int:pasajero_id>/', obtener_viajes_realizados_pasajero, name='viajes_realizados_pasajero'),
     path('viajes_realizados/conductor/<int:conductor_id>/', obtener_viajes_realizados_conductor, name='viajes_realizados_conductor'),

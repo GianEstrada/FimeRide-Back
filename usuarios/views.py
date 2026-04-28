@@ -1,11 +1,12 @@
 import json
 import os
+from datetime import datetime, timedelta
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from .models import Asignacion, DocumentacionConductor, DocumentacionPasajero, Mensaje, Solicitud, Usuario, UsuarioConductor, UsuarioPasajero
 from django.db import transaction
 from django.conf import settings
-from django.utils.timezone import now
+from django.utils.timezone import now, localtime, make_aware, is_naive
 from django.contrib.auth import authenticate
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
@@ -15,6 +16,66 @@ import boto3
 from .models import Viaje
 from usuarios import models
 from django.db.models import Q
+
+
+def _inicio_y_destino(viaje):
+    if viaje.direccion_inicio and viaje.direccion_destino:
+        return viaje.direccion_inicio, viaje.direccion_destino
+    if viaje.es_hacia_fime:
+        return viaje.direccion, 'FIME'
+    return 'FIME', viaje.direccion
+
+
+def _datetime_salida(viaje):
+    # Espera formato HH:mm en hora_salida, con fallback HH:mm:ss.
+    raw_hora = viaje.hora_salida.strip()
+    try:
+        hora = datetime.strptime(raw_hora, '%H:%M').time()
+    except ValueError:
+        hora = datetime.strptime(raw_hora, '%H:%M:%S').time()
+    dt = datetime.combine(viaje.fecha_viaje, hora)
+    if is_naive(dt):
+        dt = make_aware(dt)
+    return dt
+
+
+def _construir_preinicio(viaje):
+    asignaciones = Asignacion.objects.filter(viaje=viaje, asignado=True).select_related('pasajero__usuario')
+    pasajeros = [
+        {
+            'asignacion_id': asignacion.id,
+            'nombre': asignacion.pasajero.usuario.nombre_completo,
+            'foto_perfil': asignacion.pasajero.usuario.foto_perfil.url if asignacion.pasajero.usuario.foto_perfil else None,
+            'abordo_confirmado': asignacion.abordo_confirmado,
+        }
+        for asignacion in asignaciones
+    ]
+
+    todos_abordo = len(pasajeros) > 0 and all(p['abordo_confirmado'] for p in pasajeros)
+    salida_dt = _datetime_salida(viaje)
+    ahora = localtime(now())
+    habilitado_por_tiempo = ahora >= salida_dt + timedelta(minutes=5)
+    if viaje.gracia_adicional_hasta:
+        habilitado_por_tiempo = habilitado_por_tiempo or ahora >= localtime(viaje.gracia_adicional_hasta)
+
+    inicio, destino = _inicio_y_destino(viaje)
+    return {
+        'viaje_id': viaje.id,
+        'inicio': inicio,
+        'destino': destino,
+        'hora_salida': viaje.hora_salida,
+        'conductor_nombre': viaje.conductor.usuario.nombre_completo,
+        'vehiculo': viaje.modelo_vehiculo or viaje.descripcion,
+        'placas_vehiculo': viaje.placas_vehiculo,
+        'origen_lat': viaje.origen_lat,
+        'origen_lng': viaje.origen_lng,
+        'destino_lat': viaje.destino_lat,
+        'destino_lng': viaje.destino_lng,
+        'pasajeros': pasajeros,
+        'todos_abordo': todos_abordo,
+        'puede_iniciar': todos_abordo or habilitado_por_tiempo,
+        'puede_esperar_5_mas': ahora >= salida_dt + timedelta(minutes=5),
+    }
 
 @api_view(['GET'])
 def obtener_token(request):
@@ -42,10 +103,18 @@ def obtener_viajes(request):
             data.append({
                 'id': viaje.id,
                 'direccion': viaje.direccion,
+                'direccion_inicio': viaje.direccion_inicio,
+                'direccion_destino': viaje.direccion_destino,
+                'origen_lat': viaje.origen_lat,
+                'origen_lng': viaje.origen_lng,
+                'destino_lat': viaje.destino_lat,
+                'destino_lng': viaje.destino_lng,
                 'es_hacia_fime': viaje.es_hacia_fime,
                 'hora_salida': viaje.hora_salida,
                 'hora_llegada': viaje.hora_llegada,
                 'descripcion': viaje.descripcion,
+                'modelo_vehiculo': viaje.modelo_vehiculo,
+                'placas_vehiculo': viaje.placas_vehiculo,
                 'asientos_disponibles': viaje.asientos_disponibles,
                 'costo': str(viaje.costo),
                 'fecha_viaje': viaje.fecha_viaje.strftime('%Y-%m-%d'),
@@ -89,6 +158,14 @@ def registrar_viaje(request):
                 hora_salida=data['hora_salida'],
                 hora_llegada=data['hora_llegada'],
                 descripcion=data['descripcion'],
+                direccion_inicio=data.get('direccion_inicio', ''),
+                direccion_destino=data.get('direccion_destino', ''),
+                origen_lat=data.get('origen_lat'),
+                origen_lng=data.get('origen_lng'),
+                destino_lat=data.get('destino_lat'),
+                destino_lng=data.get('destino_lng'),
+                modelo_vehiculo=data.get('modelo_vehiculo', ''),
+                placas_vehiculo=data.get('placas_vehiculo', ''),
                 asientos_disponibles=data['asientos_disponibles'],
                 costo=data['costo'],
                 fecha_viaje=data['fecha_viaje'],
@@ -341,15 +418,19 @@ def obtener_asignaciones_conductor(request, conductor_id):
         data = [
             {
                 'id': asignacion.id,
+                'asignado': asignacion.asignado,
+                'abordo_confirmado': asignacion.abordo_confirmado,
                 'pasajero': {
                     'nombre': asignacion.pasajero.usuario.nombre_completo,
                     'foto_perfil': asignacion.pasajero.usuario.foto_perfil.url if asignacion.pasajero.usuario.foto_perfil else None,
                 },
                 'viaje': {
+                    'id': asignacion.viaje.id,
                     'direccion': asignacion.viaje.direccion,
                     'hora_salida': asignacion.viaje.hora_salida,
                     'hora_llegada': asignacion.viaje.hora_llegada,
                     'descripcion': asignacion.viaje.descripcion,
+                    'fecha_viaje': asignacion.viaje.fecha_viaje.strftime('%Y-%m-%d'),
                 },
             }
             for asignacion in asignaciones
@@ -547,3 +628,160 @@ def obtener_chat(request, usuario_id, otro_usuario_id, id_viaje):
             print(f"Error en obtener_chat: {e}")
             return JsonResponse({'error': str(e)}, status=500)
     return JsonResponse({'error': 'Método no permitido'}, status=405)
+
+
+@csrf_exempt
+def obtener_recordatorio_conductor(request, conductor_id):
+    if request.method != 'GET':
+        return JsonResponse({'error': 'Método no permitido'}, status=405)
+
+    viaje = Viaje.objects.filter(
+        conductor_id=conductor_id,
+        activo=True,
+        iniciado=False,
+        fecha_viaje=now().date(),
+    ).order_by('hora_salida').first()
+
+    if not viaje:
+        return JsonResponse({'show_popup': False, 'show_notification': False, 'preinicio': None}, status=200)
+
+    salida_dt = _datetime_salida(viaje)
+    ahora = localtime(now())
+    minutos_para_salida = int((salida_dt - ahora).total_seconds() // 60)
+    inicio, destino = _inicio_y_destino(viaje)
+
+    # Si el conductor no confirma antes de la salida, se cancela automaticamente.
+    if not viaje.confirmado_por_conductor and ahora > salida_dt:
+        viaje.activo = False
+        viaje.save(update_fields=['activo'])
+        Asignacion.objects.filter(viaje=viaje).update(activo=False)
+        return JsonResponse({'show_popup': False, 'show_notification': False, 'preinicio': None}, status=200)
+
+    preinicio = None
+    if viaje.confirmado_por_conductor and ahora >= salida_dt:
+        preinicio = _construir_preinicio(viaje)
+
+    return JsonResponse(
+        {
+            'show_popup': minutos_para_salida <= 15 and not viaje.confirmado_por_conductor and minutos_para_salida >= 0,
+            'show_notification': minutos_para_salida <= 15 and not viaje.confirmado_por_conductor and minutos_para_salida >= 0,
+            'minutos_para_salida': minutos_para_salida,
+            'viaje': {
+                'id': viaje.id,
+                'inicio': inicio,
+                'destino': destino,
+                'hora_salida': viaje.hora_salida,
+                'confirmado_por_conductor': viaje.confirmado_por_conductor,
+                'placas_vehiculo': viaje.placas_vehiculo,
+            },
+            'preinicio': preinicio,
+        },
+        status=200,
+    )
+
+
+@csrf_exempt
+def accion_viaje_conductor(request, viaje_id):
+    if request.method != 'POST':
+        return JsonResponse({'error': 'Método no permitido'}, status=405)
+
+    try:
+        data = json.loads(request.body)
+        accion = data.get('accion')
+
+        viaje = Viaje.objects.get(id=viaje_id, activo=True)
+        salida_dt = _datetime_salida(viaje)
+        ahora = localtime(now())
+
+        if accion == 'confirmar':
+            viaje.confirmado_por_conductor = True
+            viaje.confirmado_en = now()
+            viaje.save(update_fields=['confirmado_por_conductor', 'confirmado_en'])
+            return JsonResponse({'message': 'Viaje confirmado por conductor'}, status=200)
+
+        if accion == 'cancelar':
+            viaje.activo = False
+            viaje.save(update_fields=['activo'])
+            Asignacion.objects.filter(viaje=viaje).update(activo=False)
+            return JsonResponse({'message': 'Viaje cancelado'}, status=200)
+
+        if accion == 'esperar_5_mas':
+            viaje.gracia_adicional_hasta = now() + timedelta(minutes=5)
+            viaje.save(update_fields=['gracia_adicional_hasta'])
+            return JsonResponse({'message': 'Se agregaron 5 minutos extra de espera'}, status=200)
+
+        if accion == 'iniciar':
+            preinicio = _construir_preinicio(viaje)
+            if not preinicio['puede_iniciar']:
+                return JsonResponse({'error': 'Aun no se cumplen las condiciones para iniciar'}, status=400)
+
+            viaje.iniciado = True
+            viaje.inicio_real = now()
+            viaje.save(update_fields=['iniciado', 'inicio_real'])
+            return JsonResponse({'message': 'Viaje iniciado'}, status=200)
+
+        return JsonResponse({'error': 'Accion no valida'}, status=400)
+    except Viaje.DoesNotExist:
+        return JsonResponse({'error': 'Viaje no encontrado'}, status=404)
+    except Exception as e:
+        return JsonResponse({'error': str(e)}, status=500)
+
+
+@csrf_exempt
+def obtener_recordatorio_pasajero(request, pasajero_id):
+    if request.method != 'GET':
+        return JsonResponse({'error': 'Método no permitido'}, status=405)
+
+    asignaciones = Asignacion.objects.filter(
+        pasajero_id=pasajero_id,
+        asignado=True,
+        activo=True,
+        viaje__activo=True,
+        viaje__fecha_viaje=now().date(),
+    ).select_related('viaje', 'viaje__conductor__usuario')
+
+    data = []
+    for asignacion in asignaciones:
+        viaje = asignacion.viaje
+        salida_dt = _datetime_salida(viaje)
+        ahora = localtime(now())
+        minutos_para_salida = int((salida_dt - ahora).total_seconds() // 60)
+        inicio, destino = _inicio_y_destino(viaje)
+
+        data.append(
+            {
+                'asignacion_id': asignacion.id,
+                'viaje_id': viaje.id,
+                'inicio': inicio,
+                'destino': destino,
+                'hora_salida': viaje.hora_salida,
+                'confirmado_por_conductor': viaje.confirmado_por_conductor,
+                'abordo_confirmado': asignacion.abordo_confirmado,
+                'origen_lat': viaje.origen_lat,
+                'origen_lng': viaje.origen_lng,
+                'destino_lat': viaje.destino_lat,
+                'destino_lng': viaje.destino_lng,
+                'placas_vehiculo': viaje.placas_vehiculo,
+                'mostrar_aviso_5_min': viaje.confirmado_por_conductor and minutos_para_salida <= 5 and minutos_para_salida > 0,
+                'mostrar_preinicio': viaje.confirmado_por_conductor and minutos_para_salida <= 0 and not asignacion.abordo_confirmado,
+                'minutos_para_salida': minutos_para_salida,
+            }
+        )
+
+    return JsonResponse(data, safe=False, status=200)
+
+
+@csrf_exempt
+def confirmar_abordo_pasajero(request, asignacion_id):
+    if request.method != 'PATCH':
+        return JsonResponse({'error': 'Método no permitido'}, status=405)
+    try:
+        asignacion = Asignacion.objects.get(id=asignacion_id, activo=True, asignado=True)
+        asignacion.abordo_confirmado = True
+        asignacion.abordo_confirmado_en = now()
+        asignacion.save(update_fields=['abordo_confirmado', 'abordo_confirmado_en'])
+        return JsonResponse({'message': 'Abordaje confirmado'}, status=200)
+    except Asignacion.DoesNotExist:
+        return JsonResponse({'error': 'Asignación no encontrada'}, status=404)
+    except Exception as e:
+        return JsonResponse({'error': str(e)}, status=500)
