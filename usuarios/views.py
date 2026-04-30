@@ -91,6 +91,16 @@ def _cerrar_viaje(viaje):
 
 
 def _cerrar_viaje_si_corresponde(viaje):
+    hay_asignaciones_activas = Asignacion.objects.filter(
+        viaje=viaje,
+        asignado=True,
+        activo=True,
+    ).exists()
+
+    # Si el viaje no tiene pasajeros asignados, no se autocierra.
+    if not hay_asignaciones_activas:
+        return False
+
     pasajeros_en_vehiculo = Asignacion.objects.filter(
         viaje=viaje,
         asignado=True,
@@ -1274,12 +1284,6 @@ def forzar_viaje_en_curso_conductor(request, conductor_id):
             .order_by('id')
             .first()
         )
-        if not asignacion:
-            return JsonResponse(
-                {'error': 'No hay pasajeros asignados para forzar viaje en curso'},
-                status=400,
-            )
-
         viaje = _forzar_viaje_en_curso(viaje, asignacion_prioritaria=asignacion)
         return JsonResponse({'message': 'Viaje temporal forzado', 'viaje_id': viaje.id}, status=200)
     except Exception as e:
