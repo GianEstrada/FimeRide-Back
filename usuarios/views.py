@@ -213,6 +213,47 @@ def _serializar_viaje_en_curso(viaje, asignacion_pasajero=None):
     return data
 
 
+def _forzar_viaje_en_curso(viaje, asignacion_prioritaria=None):
+    viaje.activo = True
+    viaje.finalizado = False
+    viaje.finalizado_en = None
+    viaje.confirmado_por_conductor = True
+    if viaje.confirmado_en is None:
+        viaje.confirmado_en = now()
+    viaje.iniciado = True
+    if viaje.inicio_real is None:
+        viaje.inicio_real = now()
+
+    if viaje.conductor_lat_actual is None and viaje.origen_lat is not None:
+        viaje.conductor_lat_actual = viaje.origen_lat
+    if viaje.conductor_lng_actual is None and viaje.origen_lng is not None:
+        viaje.conductor_lng_actual = viaje.origen_lng
+    viaje.conductor_ubicacion_actualizada_en = now()
+    viaje.save(
+        update_fields=[
+            'activo',
+            'finalizado',
+            'finalizado_en',
+            'confirmado_por_conductor',
+            'confirmado_en',
+            'iniciado',
+            'inicio_real',
+            'conductor_lat_actual',
+            'conductor_lng_actual',
+            'conductor_ubicacion_actualizada_en',
+        ]
+    )
+
+    asignaciones = Asignacion.objects.filter(viaje=viaje, asignado=True, activo=True).order_by('id')
+    objetivo = asignacion_prioritaria or asignaciones.first()
+    if objetivo and not objetivo.descenso_confirmado and not objetivo.abordo_confirmado:
+        objetivo.abordo_confirmado = True
+        objetivo.abordo_confirmado_en = now()
+        objetivo.save(update_fields=['abordo_confirmado', 'abordo_confirmado_en'])
+
+    return viaje
+
+
 def _construir_preinicio(viaje):
     asignaciones = Asignacion.objects.filter(viaje=viaje, asignado=True).select_related('pasajero__usuario')
     pasajeros = [
@@ -1205,5 +1246,69 @@ def crear_reporte(request):
         return JsonResponse({'error': 'Usuario no encontrado'}, status=404)
     except Viaje.DoesNotExist:
         return JsonResponse({'error': 'Viaje no encontrado'}, status=404)
+    except Exception as e:
+        return JsonResponse({'error': str(e)}, status=500)
+
+
+@csrf_exempt
+def forzar_viaje_en_curso_conductor(request, conductor_id):
+    if request.method != 'POST':
+        return JsonResponse({'error': 'Método no permitido'}, status=405)
+
+    try:
+        viaje = (
+            Viaje.objects.filter(
+                conductor_id=conductor_id,
+                activo=True,
+                finalizado=False,
+            )
+            .order_by('-fecha_viaje', '-id')
+            .first()
+        )
+
+        if not viaje:
+            return JsonResponse({'error': 'No hay viajes activos para este conductor'}, status=404)
+
+        asignacion = (
+            Asignacion.objects.filter(viaje=viaje, asignado=True, activo=True)
+            .order_by('id')
+            .first()
+        )
+        if not asignacion:
+            return JsonResponse(
+                {'error': 'No hay pasajeros asignados para forzar viaje en curso'},
+                status=400,
+            )
+
+        viaje = _forzar_viaje_en_curso(viaje, asignacion_prioritaria=asignacion)
+        return JsonResponse({'message': 'Viaje temporal forzado', 'viaje_id': viaje.id}, status=200)
+    except Exception as e:
+        return JsonResponse({'error': str(e)}, status=500)
+
+
+@csrf_exempt
+def forzar_viaje_en_curso_pasajero(request, pasajero_id):
+    if request.method != 'POST':
+        return JsonResponse({'error': 'Método no permitido'}, status=405)
+
+    try:
+        asignacion = (
+            Asignacion.objects.filter(
+                pasajero_id=pasajero_id,
+                asignado=True,
+                activo=True,
+                viaje__activo=True,
+                viaje__finalizado=False,
+            )
+            .select_related('viaje')
+            .order_by('-viaje__fecha_viaje', '-viaje__id')
+            .first()
+        )
+
+        if not asignacion:
+            return JsonResponse({'error': 'No hay asignaciones activas para este pasajero'}, status=404)
+
+        viaje = _forzar_viaje_en_curso(asignacion.viaje, asignacion_prioritaria=asignacion)
+        return JsonResponse({'message': 'Viaje temporal forzado', 'viaje_id': viaje.id}, status=200)
     except Exception as e:
         return JsonResponse({'error': str(e)}, status=500)

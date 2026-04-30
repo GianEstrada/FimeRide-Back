@@ -2,7 +2,7 @@ from xml.etree.ElementInclude import include
 from django.urls import path
 from rest_framework_simplejwt.views import TokenObtainPairView
 
-from .views import accion_viaje_conductor, actualizar_asignacion, actualizar_estado_parada, actualizar_ubicacion_conductor, confirmar_abordo_pasajero, crear_asignacion, crear_reporte, enviar_mensaje, obtener_asignaciones_conductor, obtener_chat, obtener_estado_conductor, obtener_info_usuario, obtener_mensajes_activos, obtener_recordatorio_conductor, obtener_recordatorio_pasajero, obtener_token, obtener_viaje_en_curso_conductor, obtener_viaje_en_curso_pasajero, obtener_viajes_realizados_conductor, obtener_viajes_realizados_pasajero, registrar_usuario, registrar_conductor, login_usuario,registrar_viaje,obtener_viajes, solicitar_parada_pasajero
+from .views import accion_viaje_conductor, actualizar_asignacion, actualizar_estado_parada, actualizar_ubicacion_conductor, confirmar_abordo_pasajero, crear_asignacion, crear_reporte, enviar_mensaje, forzar_viaje_en_curso_conductor, forzar_viaje_en_curso_pasajero, obtener_asignaciones_conductor, obtener_chat, obtener_estado_conductor, obtener_info_usuario, obtener_mensajes_activos, obtener_recordatorio_conductor, obtener_recordatorio_pasajero, obtener_token, obtener_viaje_en_curso_conductor, obtener_viaje_en_curso_pasajero, obtener_viajes_realizados_conductor, obtener_viajes_realizados_pasajero, registrar_usuario, registrar_conductor, login_usuario,registrar_viaje,obtener_viajes, solicitar_parada_pasajero
 from usuarios import views
 
 urlpatterns = [
@@ -24,6 +24,8 @@ urlpatterns = [
     path('viajes/<int:viaje_id>/ubicacion_conductor/', actualizar_ubicacion_conductor, name='actualizar_ubicacion_conductor'),
     path('viajes/conductor/<int:conductor_id>/en_curso/', obtener_viaje_en_curso_conductor, name='obtener_viaje_en_curso_conductor'),
     path('viajes/pasajero/<int:pasajero_id>/en_curso/', obtener_viaje_en_curso_pasajero, name='obtener_viaje_en_curso_pasajero'),
+    path('viajes/conductor/<int:conductor_id>/forzar_en_curso/', forzar_viaje_en_curso_conductor, name='forzar_viaje_en_curso_conductor'),
+    path('viajes/pasajero/<int:pasajero_id>/forzar_en_curso/', forzar_viaje_en_curso_pasajero, name='forzar_viaje_en_curso_pasajero'),
     path('usuario/<int:usuario_id>/', obtener_info_usuario, name='obtener_info_usuario'),
     path('viajes_realizados/pasajero/<int:pasajero_id>/', obtener_viajes_realizados_pasajero, name='viajes_realizados_pasajero'),
     path('viajes_realizados/conductor/<int:conductor_id>/', obtener_viajes_realizados_conductor, name='viajes_realizados_conductor'),
