@@ -46,8 +46,8 @@ DEFAULT_FILE_STORAGE = "storages.backends.s3boto3.S3Boto3Storage"
 # Configuración de credenciales de AWS
 AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID")  # Tu Access Key ID
 AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")  # Tu Secret Access Key
-AWS_STORAGE_BUCKET_NAME = "fimeridearchivos"  # Nombre del bucket
-AWS_S3_REGION_NAME = "us-east-2"  # Región del bucket (ajusta según tu configuración)
+AWS_STORAGE_BUCKET_NAME = os.getenv("AWS_STORAGE_BUCKET_NAME", "fimeridearchivos")
+AWS_S3_REGION_NAME = os.getenv("AWS_S3_REGION_NAME", "us-east-2")
 AWS_QUERYSTRING_AUTH = (
     False  # Deshabilita los parámetros de consulta en las URLs públicas
 )

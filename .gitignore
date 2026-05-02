@@ -23,3 +23,9 @@ staticfiles/
 .vscode/
 .idea/
 *.swp
+
+# Local media and test artifacts
+*.pdf
+*.jpg
+documentos/
+fotos_perfil/

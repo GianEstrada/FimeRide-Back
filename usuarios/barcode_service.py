@@ -39,6 +39,7 @@ def extract_matricula_from_pdf(pdf_bytes, matricula):
 
     image = images[0]
     normalized_matricula = _normalize_text(matricula)
+    normalized_recibo = _normalize_text("RECIBO PAGADO")
 
     try:
         decoded = decode(image)
@@ -47,7 +48,8 @@ def extract_matricula_from_pdf(pdf_bytes, matricula):
                 code.data.decode("utf-8", errors="ignore") for code in decoded
             )
             normalized_text = _normalize_text(detected_text)
-            return normalized_matricula in normalized_text, detected_text, "barcode"
+            valid = normalized_matricula in normalized_text and normalized_recibo in normalized_text
+            return valid, detected_text, "barcode"
     except Exception:
         pass
 
@@ -61,4 +63,5 @@ def extract_matricula_from_pdf(pdf_bytes, matricula):
         item.get("DetectedText", "") for item in response.get("TextDetections", [])
     ).strip()
     normalized_text = _normalize_text(detected_text)
-    return normalized_matricula in normalized_text, detected_text, "ocr"
+    valid = normalized_matricula in normalized_text and normalized_recibo in normalized_text
+    return valid, detected_text, "ocr"

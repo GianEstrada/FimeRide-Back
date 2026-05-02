@@ -586,7 +586,7 @@ def registrar_usuario(request):
                 tipo_documento='boleta_rectoria',
                 documento=boleta_rectoria,
                 necesita_autorizacion=False,
-                autorizado=True,
+                autorizado=False,
             )
 
             # Crear usuario conductor (inactivo por defecto)
@@ -650,7 +650,8 @@ def registrar_usuario(request):
                         usuario.matricula,
                     )
                     boleta_doc.ai_boleta_valid = boleta_valid
-                    boleta_doc.save(update_fields=['ai_boleta_valid'])
+                    boleta_doc.autorizado = boleta_valid
+                    boleta_doc.save(update_fields=['ai_boleta_valid', 'autorizado'])
                     logger.info(
                         'register_boleta_check usuario_id=%s success=%s method=%s',
                         usuario.id,
