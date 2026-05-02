@@ -1,15 +1,17 @@
 import io
 import json
 import logging
+import math
 import os
 import uuid
+from datetime import datetime, timedelta
 from django.http import JsonResponse
 from django.http.multipartparser import MultiPartParser
 from django.views.decorators.csrf import csrf_exempt
-from .models import Asignacion, DocumentacionConductor, DocumentacionPasajero, Mensaje, Solicitud, Usuario, UsuarioConductor, UsuarioPasajero
+from .models import Asignacion, DocumentacionConductor, DocumentacionPasajero, Mensaje, Reporte, Solicitud, Usuario, UsuarioConductor, UsuarioPasajero
 from django.db import transaction
 from django.conf import settings
-from django.utils.timezone import now
+from django.utils.timezone import now, localtime, make_aware, is_naive
 from django.contrib.auth import authenticate
 from django.core.files.base import ContentFile
 from django.core.files.storage import default_storage
@@ -79,6 +81,290 @@ def _truncate_text(value, limit=200):
         return ""
     return value[:limit]
 
+
+def _inicio_y_destino(viaje):
+    if viaje.direccion_inicio and viaje.direccion_destino:
+        return viaje.direccion_inicio, viaje.direccion_destino
+    if viaje.es_hacia_fime:
+        return viaje.direccion, 'FIME'
+    return 'FIME', viaje.direccion
+
+
+def _datetime_salida(viaje):
+    # Espera formato HH:mm en hora_salida, con fallback HH:mm:ss.
+    raw_hora = viaje.hora_salida.strip()
+    try:
+        hora = datetime.strptime(raw_hora, '%H:%M').time()
+    except ValueError:
+        hora = datetime.strptime(raw_hora, '%H:%M:%S').time()
+    dt = datetime.combine(viaje.fecha_viaje, hora)
+    if is_naive(dt):
+        dt = make_aware(dt)
+    return dt
+
+
+def _haversine_metros(lat1, lng1, lat2, lng2):
+    if None in (lat1, lng1, lat2, lng2):
+        return None
+
+    radio = 6371000
+    lat1_rad = math.radians(lat1)
+    lat2_rad = math.radians(lat2)
+    delta_lat = math.radians(lat2 - lat1)
+    delta_lng = math.radians(lng2 - lng1)
+
+    a = (
+        math.sin(delta_lat / 2) ** 2
+        + math.cos(lat1_rad) * math.cos(lat2_rad) * math.sin(delta_lng / 2) ** 2
+    )
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    return radio * c
+
+
+def _punto_antes_de_objetivo(origen_lat, origen_lng, destino_lat, destino_lng, metros_antes=200):
+    distancia_total = _haversine_metros(origen_lat, origen_lng, destino_lat, destino_lng)
+    if distancia_total is None:
+        return destino_lat, destino_lng
+    if distancia_total <= metros_antes:
+        return origen_lat, origen_lng
+
+    ratio = max((distancia_total - metros_antes) / distancia_total, 0)
+    lat = origen_lat + (destino_lat - origen_lat) * ratio
+    lng = origen_lng + (destino_lng - origen_lng) * ratio
+    return lat, lng
+
+
+def _estado_pasajero(asignacion):
+    if asignacion.descenso_confirmado:
+        return 'bajo_del_vehiculo'
+    if asignacion.abordo_confirmado:
+        return 'en_vehiculo'
+    return 'pendiente_abordar'
+
+
+def _cerrar_viaje(viaje):
+    if viaje.finalizado and not viaje.activo:
+        return
+
+    viaje.activo = False
+    viaje.finalizado = True
+    viaje.finalizado_en = now()
+    viaje.save(update_fields=['activo', 'finalizado', 'finalizado_en'])
+    Asignacion.objects.filter(viaje=viaje, activo=True).update(activo=False)
+
+
+def _cerrar_viaje_si_corresponde(viaje):
+    hay_asignaciones_activas = Asignacion.objects.filter(
+        viaje=viaje,
+        asignado=True,
+        activo=True,
+    ).exists()
+
+    # Si el viaje no tiene pasajeros asignados, no se autocierra.
+    if not hay_asignaciones_activas:
+        return False
+
+    pasajeros_en_vehiculo = Asignacion.objects.filter(
+        viaje=viaje,
+        asignado=True,
+        activo=True,
+        abordo_confirmado=True,
+        descenso_confirmado=False,
+    ).exists()
+
+    if not pasajeros_en_vehiculo:
+        _cerrar_viaje(viaje)
+        return True
+
+    distancia_a_destino = _haversine_metros(
+        viaje.conductor_lat_actual,
+        viaje.conductor_lng_actual,
+        viaje.destino_lat,
+        viaje.destino_lng,
+    )
+    if distancia_a_destino is not None and distancia_a_destino <= 40:
+        _cerrar_viaje(viaje)
+        return True
+
+    return False
+
+
+def _serialize_pasajero_en_curso(asignacion):
+    usuario = asignacion.pasajero.usuario
+    parada_activa = asignacion.parada_solicitada and not asignacion.descenso_confirmado
+    return {
+        'asignacion_id': asignacion.id,
+        'nombre': usuario.nombre_completo,
+        'foto_perfil': usuario.foto_perfil.url if usuario.foto_perfil else None,
+        'estado': _estado_pasajero(asignacion),
+        'destino': {
+            'lat': asignacion.destino_lat,
+            'lng': asignacion.destino_lng,
+            'descripcion': asignacion.destino_descripcion,
+        },
+        'parada_solicitada': parada_activa,
+        'parada': {
+            'objetivo_lat': asignacion.parada_objetivo_lat,
+            'objetivo_lng': asignacion.parada_objetivo_lng,
+            'referencia_lat': asignacion.parada_referencia_lat,
+            'referencia_lng': asignacion.parada_referencia_lng,
+            'solicitada_en': localtime(asignacion.parada_solicitada_en).isoformat() if asignacion.parada_solicitada_en else None,
+        } if parada_activa else None,
+    }
+
+
+def _serializar_viaje_en_curso(viaje, asignacion_pasajero=None):
+    inicio, destino = _inicio_y_destino(viaje)
+    asignaciones = Asignacion.objects.filter(viaje=viaje, asignado=True).select_related('pasajero__usuario')
+    pasajeros = [_serialize_pasajero_en_curso(asignacion) for asignacion in asignaciones]
+    parada_activa = next((p for p in pasajeros if p['parada_solicitada']), None)
+
+    data = {
+        'viaje_id': viaje.id,
+        'inicio': inicio,
+        'destino': destino,
+        'hora_salida': viaje.hora_salida,
+        'hora_llegada': viaje.hora_llegada,
+        'conductor': {
+            'nombre': viaje.conductor.usuario.nombre_completo,
+            'vehiculo': viaje.modelo_vehiculo or viaje.descripcion,
+            'placas': viaje.placas_vehiculo,
+        },
+        'origen': {
+            'lat': viaje.origen_lat,
+            'lng': viaje.origen_lng,
+            'descripcion': inicio,
+        },
+        'destino_final': {
+            'lat': viaje.destino_lat,
+            'lng': viaje.destino_lng,
+            'descripcion': destino,
+        },
+        'conductor_posicion': {
+            'lat': viaje.conductor_lat_actual,
+            'lng': viaje.conductor_lng_actual,
+            'actualizada_en': localtime(viaje.conductor_ubicacion_actualizada_en).isoformat() if viaje.conductor_ubicacion_actualizada_en else None,
+        },
+        'parada_activa': parada_activa,
+        'pasajeros': pasajeros,
+    }
+
+    if asignacion_pasajero is not None:
+        destino_lat = asignacion_pasajero.destino_lat or viaje.destino_lat
+        destino_lng = asignacion_pasajero.destino_lng or viaje.destino_lng
+        distancia_parada = _haversine_metros(
+            viaje.conductor_lat_actual,
+            viaje.conductor_lng_actual,
+            destino_lat,
+            destino_lng,
+        )
+        data['tu_asignacion'] = {
+            'asignacion_id': asignacion_pasajero.id,
+            'estado': _estado_pasajero(asignacion_pasajero),
+            'destino': {
+                'lat': destino_lat,
+                'lng': destino_lng,
+                'descripcion': asignacion_pasajero.destino_descripcion or destino,
+            },
+            'distancia_a_tu_parada_metros': int(distancia_parada) if distancia_parada is not None else None,
+            'puede_solicitar_parada': (
+                distancia_parada is not None
+                and distancia_parada <= 200
+                and asignacion_pasajero.abordo_confirmado
+                and not asignacion_pasajero.descenso_confirmado
+                and not asignacion_pasajero.parada_solicitada
+            ),
+            'parada_solicitada': asignacion_pasajero.parada_solicitada,
+            'parada': {
+                'objetivo_lat': asignacion_pasajero.parada_objetivo_lat,
+                'objetivo_lng': asignacion_pasajero.parada_objetivo_lng,
+                'referencia_lat': asignacion_pasajero.parada_referencia_lat,
+                'referencia_lng': asignacion_pasajero.parada_referencia_lng,
+            } if asignacion_pasajero.parada_solicitada else None,
+        }
+
+    return data
+
+
+def _forzar_viaje_en_curso(viaje, asignacion_prioritaria=None):
+    viaje.activo = True
+    viaje.finalizado = False
+    viaje.finalizado_en = None
+    viaje.confirmado_por_conductor = True
+    if viaje.confirmado_en is None:
+        viaje.confirmado_en = now()
+    viaje.iniciado = True
+    if viaje.inicio_real is None:
+        viaje.inicio_real = now()
+
+    if viaje.conductor_lat_actual is None and viaje.origen_lat is not None:
+        viaje.conductor_lat_actual = viaje.origen_lat
+    if viaje.conductor_lng_actual is None and viaje.origen_lng is not None:
+        viaje.conductor_lng_actual = viaje.origen_lng
+    viaje.conductor_ubicacion_actualizada_en = now()
+    viaje.save(
+        update_fields=[
+            'activo',
+            'finalizado',
+            'finalizado_en',
+            'confirmado_por_conductor',
+            'confirmado_en',
+            'iniciado',
+            'inicio_real',
+            'conductor_lat_actual',
+            'conductor_lng_actual',
+            'conductor_ubicacion_actualizada_en',
+        ]
+    )
+
+    asignaciones = Asignacion.objects.filter(viaje=viaje, asignado=True, activo=True).order_by('id')
+    objetivo = asignacion_prioritaria or asignaciones.first()
+    if objetivo and not objetivo.descenso_confirmado and not objetivo.abordo_confirmado:
+        objetivo.abordo_confirmado = True
+        objetivo.abordo_confirmado_en = now()
+        objetivo.save(update_fields=['abordo_confirmado', 'abordo_confirmado_en'])
+
+    return viaje
+
+
+def _construir_preinicio(viaje):
+    asignaciones = Asignacion.objects.filter(viaje=viaje, asignado=True).select_related('pasajero__usuario')
+    pasajeros = [
+        {
+            'asignacion_id': asignacion.id,
+            'nombre': asignacion.pasajero.usuario.nombre_completo,
+            'foto_perfil': asignacion.pasajero.usuario.foto_perfil.url if asignacion.pasajero.usuario.foto_perfil else None,
+            'abordo_confirmado': asignacion.abordo_confirmado,
+        }
+        for asignacion in asignaciones
+    ]
+
+    todos_abordo = len(pasajeros) > 0 and all(p['abordo_confirmado'] for p in pasajeros)
+    salida_dt = _datetime_salida(viaje)
+    ahora = localtime(now())
+    habilitado_por_tiempo = ahora >= salida_dt + timedelta(minutes=5)
+    if viaje.gracia_adicional_hasta:
+        habilitado_por_tiempo = habilitado_por_tiempo or ahora >= localtime(viaje.gracia_adicional_hasta)
+
+    inicio, destino = _inicio_y_destino(viaje)
+    return {
+        'viaje_id': viaje.id,
+        'inicio': inicio,
+        'destino': destino,
+        'hora_salida': viaje.hora_salida,
+        'conductor_nombre': viaje.conductor.usuario.nombre_completo,
+        'vehiculo': viaje.modelo_vehiculo or viaje.descripcion,
+        'placas_vehiculo': viaje.placas_vehiculo,
+        'origen_lat': viaje.origen_lat,
+        'origen_lng': viaje.origen_lng,
+        'destino_lat': viaje.destino_lat,
+        'destino_lng': viaje.destino_lng,
+        'pasajeros': pasajeros,
+        'todos_abordo': todos_abordo,
+        'puede_iniciar': todos_abordo or habilitado_por_tiempo,
+        'puede_esperar_5_mas': ahora >= salida_dt + timedelta(minutes=5),
+    }
+
 @api_view(['GET'])
 def obtener_token(request):
     token = os.getenv('TOKEN_MAPBOX', 'token_no_configurado')
@@ -105,10 +391,18 @@ def obtener_viajes(request):
             data.append({
                 'id': viaje.id,
                 'direccion': viaje.direccion,
+                'direccion_inicio': viaje.direccion_inicio,
+                'direccion_destino': viaje.direccion_destino,
+                'origen_lat': viaje.origen_lat,
+                'origen_lng': viaje.origen_lng,
+                'destino_lat': viaje.destino_lat,
+                'destino_lng': viaje.destino_lng,
                 'es_hacia_fime': viaje.es_hacia_fime,
                 'hora_salida': viaje.hora_salida,
                 'hora_llegada': viaje.hora_llegada,
                 'descripcion': viaje.descripcion,
+                'modelo_vehiculo': viaje.modelo_vehiculo,
+                'placas_vehiculo': viaje.placas_vehiculo,
                 'asientos_disponibles': viaje.asientos_disponibles,
                 'costo': str(viaje.costo),
                 'fecha_viaje': viaje.fecha_viaje.strftime('%Y-%m-%d'),
@@ -152,6 +446,14 @@ def registrar_viaje(request):
                 hora_salida=data['hora_salida'],
                 hora_llegada=data['hora_llegada'],
                 descripcion=data['descripcion'],
+                direccion_inicio=data.get('direccion_inicio', ''),
+                direccion_destino=data.get('direccion_destino', ''),
+                origen_lat=data.get('origen_lat'),
+                origen_lng=data.get('origen_lng'),
+                destino_lat=data.get('destino_lat'),
+                destino_lng=data.get('destino_lng'),
+                modelo_vehiculo=data.get('modelo_vehiculo', ''),
+                placas_vehiculo=data.get('placas_vehiculo', ''),
                 asientos_disponibles=data['asientos_disponibles'],
                 costo=data['costo'],
                 fecha_viaje=data['fecha_viaje'],
@@ -499,6 +801,9 @@ def crear_asignacion(request):
                 pasajero=pasajero,
                 viaje=viaje,
                 conductor=conductor,
+                destino_lat=viaje.destino_lat,
+                destino_lng=viaje.destino_lng,
+                destino_descripcion=viaje.direccion_destino or viaje.direccion,
             )
             return JsonResponse({'message': 'Asignación creada exitosamente', 'asignacion_id': asignacion.id}, status=201)
         except UsuarioPasajero.DoesNotExist:
@@ -516,15 +821,19 @@ def obtener_asignaciones_conductor(request, conductor_id):
         data = [
             {
                 'id': asignacion.id,
+                'asignado': asignacion.asignado,
+                'abordo_confirmado': asignacion.abordo_confirmado,
                 'pasajero': {
                     'nombre': asignacion.pasajero.usuario.nombre_completo,
                     'foto_perfil': asignacion.pasajero.usuario.foto_perfil.url if asignacion.pasajero.usuario.foto_perfil else None,
                 },
                 'viaje': {
+                    'id': asignacion.viaje.id,
                     'direccion': asignacion.viaje.direccion,
                     'hora_salida': asignacion.viaje.hora_salida,
                     'hora_llegada': asignacion.viaje.hora_llegada,
                     'descripcion': asignacion.viaje.descripcion,
+                    'fecha_viaje': asignacion.viaje.fecha_viaje.strftime('%Y-%m-%d'),
                 },
             }
             for asignacion in asignaciones
@@ -998,3 +1307,461 @@ def get_ai_status(request, uid):
     except Exception:
         logger.exception('get_ai_status error usuario_id=%s', uid)
         return JsonResponse({'error': 'Error interno'}, status=500)
+
+def obtener_recordatorio_conductor(request, conductor_id):
+    if request.method != 'GET':
+        return JsonResponse({'error': 'Método no permitido'}, status=405)
+
+    viaje = Viaje.objects.filter(
+        conductor_id=conductor_id,
+        activo=True,
+        iniciado=False,
+        fecha_viaje=now().date(),
+    ).order_by('hora_salida').first()
+
+    if not viaje:
+        return JsonResponse({'show_popup': False, 'show_notification': False, 'preinicio': None}, status=200)
+
+    salida_dt = _datetime_salida(viaje)
+    ahora = localtime(now())
+    minutos_para_salida = int((salida_dt - ahora).total_seconds() // 60)
+    inicio, destino = _inicio_y_destino(viaje)
+
+    # Si el conductor no confirma antes de la salida, se cancela automaticamente.
+    if not viaje.confirmado_por_conductor and ahora > salida_dt:
+        viaje.activo = False
+        viaje.save(update_fields=['activo'])
+        Asignacion.objects.filter(viaje=viaje).update(activo=False)
+        return JsonResponse({'show_popup': False, 'show_notification': False, 'preinicio': None}, status=200)
+
+    preinicio = None
+    if viaje.confirmado_por_conductor and ahora >= salida_dt:
+        preinicio = _construir_preinicio(viaje)
+
+    return JsonResponse(
+        {
+            'show_popup': minutos_para_salida <= 15 and not viaje.confirmado_por_conductor and minutos_para_salida >= 0,
+            'show_notification': minutos_para_salida <= 15 and not viaje.confirmado_por_conductor and minutos_para_salida >= 0,
+            'minutos_para_salida': minutos_para_salida,
+            'viaje': {
+                'id': viaje.id,
+                'inicio': inicio,
+                'destino': destino,
+                'hora_salida': viaje.hora_salida,
+                'confirmado_por_conductor': viaje.confirmado_por_conductor,
+                'placas_vehiculo': viaje.placas_vehiculo,
+            },
+            'preinicio': preinicio,
+        },
+        status=200,
+    )
+
+
+@csrf_exempt
+def accion_viaje_conductor(request, viaje_id):
+    if request.method != 'POST':
+        return JsonResponse({'error': 'Método no permitido'}, status=405)
+
+    try:
+        data = json.loads(request.body)
+        accion = data.get('accion')
+
+        viaje = Viaje.objects.get(id=viaje_id, activo=True)
+        salida_dt = _datetime_salida(viaje)
+        ahora = localtime(now())
+
+        if accion == 'confirmar':
+            viaje.confirmado_por_conductor = True
+            viaje.confirmado_en = now()
+            viaje.save(update_fields=['confirmado_por_conductor', 'confirmado_en'])
+            return JsonResponse({'message': 'Viaje confirmado por conductor'}, status=200)
+
+        if accion == 'cancelar':
+            viaje.activo = False
+            viaje.save(update_fields=['activo'])
+            Asignacion.objects.filter(viaje=viaje).update(activo=False)
+            return JsonResponse({'message': 'Viaje cancelado'}, status=200)
+
+        if accion == 'esperar_5_mas':
+            viaje.gracia_adicional_hasta = now() + timedelta(minutes=5)
+            viaje.save(update_fields=['gracia_adicional_hasta'])
+            return JsonResponse({'message': 'Se agregaron 5 minutos extra de espera'}, status=200)
+
+        if accion == 'iniciar':
+            preinicio = _construir_preinicio(viaje)
+            if not preinicio['puede_iniciar']:
+                return JsonResponse({'error': 'Aun no se cumplen las condiciones para iniciar'}, status=400)
+
+            viaje.iniciado = True
+            viaje.inicio_real = now()
+            viaje.save(update_fields=['iniciado', 'inicio_real'])
+            return JsonResponse({'message': 'Viaje iniciado'}, status=200)
+
+        return JsonResponse({'error': 'Accion no valida'}, status=400)
+    except Viaje.DoesNotExist:
+        return JsonResponse({'error': 'Viaje no encontrado'}, status=404)
+    except Exception as e:
+        return JsonResponse({'error': str(e)}, status=500)
+
+
+@csrf_exempt
+def obtener_recordatorio_pasajero(request, pasajero_id):
+    if request.method != 'GET':
+        return JsonResponse({'error': 'Método no permitido'}, status=405)
+
+    asignaciones = Asignacion.objects.filter(
+        pasajero_id=pasajero_id,
+        asignado=True,
+        activo=True,
+        viaje__activo=True,
+        viaje__fecha_viaje=now().date(),
+    ).select_related('viaje', 'viaje__conductor__usuario')
+
+    data = []
+    for asignacion in asignaciones:
+        viaje = asignacion.viaje
+        salida_dt = _datetime_salida(viaje)
+        ahora = localtime(now())
+        minutos_para_salida = int((salida_dt - ahora).total_seconds() // 60)
+        inicio, destino = _inicio_y_destino(viaje)
+
+        data.append(
+            {
+                'asignacion_id': asignacion.id,
+                'viaje_id': viaje.id,
+                'inicio': inicio,
+                'destino': destino,
+                'hora_salida': viaje.hora_salida,
+                'confirmado_por_conductor': viaje.confirmado_por_conductor,
+                'abordo_confirmado': asignacion.abordo_confirmado,
+                'origen_lat': viaje.origen_lat,
+                'origen_lng': viaje.origen_lng,
+                'destino_lat': viaje.destino_lat,
+                'destino_lng': viaje.destino_lng,
+                'placas_vehiculo': viaje.placas_vehiculo,
+                'mostrar_aviso_5_min': viaje.confirmado_por_conductor and minutos_para_salida <= 5 and minutos_para_salida > 0,
+                'mostrar_preinicio': viaje.confirmado_por_conductor and minutos_para_salida <= 0 and not asignacion.abordo_confirmado,
+                'minutos_para_salida': minutos_para_salida,
+            }
+        )
+
+    return JsonResponse(data, safe=False, status=200)
+
+
+@csrf_exempt
+def confirmar_abordo_pasajero(request, asignacion_id):
+    if request.method != 'PATCH':
+        return JsonResponse({'error': 'Método no permitido'}, status=405)
+    try:
+        asignacion = Asignacion.objects.get(id=asignacion_id, activo=True, asignado=True)
+        asignacion.abordo_confirmado = True
+        asignacion.abordo_confirmado_en = now()
+        asignacion.save(update_fields=['abordo_confirmado', 'abordo_confirmado_en'])
+        return JsonResponse({'message': 'Abordaje confirmado'}, status=200)
+    except Asignacion.DoesNotExist:
+        return JsonResponse({'error': 'Asignación no encontrada'}, status=404)
+    except Exception as e:
+        return JsonResponse({'error': str(e)}, status=500)
+
+
+@csrf_exempt
+def obtener_viaje_en_curso_conductor(request, conductor_id):
+    if request.method != 'GET':
+        return JsonResponse({'error': 'Método no permitido'}, status=405)
+
+    viaje = Viaje.objects.filter(
+        conductor_id=conductor_id,
+        activo=True,
+        iniciado=True,
+        finalizado=False,
+    ).select_related('conductor__usuario').order_by('-inicio_real').first()
+
+    if not viaje:
+        return JsonResponse({'hay_viaje': False}, status=200)
+
+    if _cerrar_viaje_si_corresponde(viaje):
+        return JsonResponse({'hay_viaje': False, 'viaje_finalizado': True}, status=200)
+
+    return JsonResponse({'hay_viaje': True, 'viaje': _serializar_viaje_en_curso(viaje)}, status=200)
+
+
+@csrf_exempt
+def obtener_viaje_en_curso_pasajero(request, pasajero_id):
+    if request.method != 'GET':
+        return JsonResponse({'error': 'Método no permitido'}, status=405)
+
+    asignacion = Asignacion.objects.filter(
+        pasajero_id=pasajero_id,
+        asignado=True,
+        activo=True,
+        viaje__activo=True,
+        viaje__iniciado=True,
+        viaje__finalizado=False,
+        descenso_confirmado=False,
+    ).select_related('viaje', 'viaje__conductor__usuario').order_by('-viaje__inicio_real').first()
+
+    if not asignacion:
+        return JsonResponse({'hay_viaje': False}, status=200)
+
+    viaje = asignacion.viaje
+    if _cerrar_viaje_si_corresponde(viaje):
+        return JsonResponse({'hay_viaje': False, 'viaje_finalizado': True}, status=200)
+
+    return JsonResponse(
+        {'hay_viaje': True, 'viaje': _serializar_viaje_en_curso(viaje, asignacion_pasajero=asignacion)},
+        status=200,
+    )
+
+
+@csrf_exempt
+def actualizar_ubicacion_conductor(request, viaje_id):
+    if request.method != 'POST':
+        return JsonResponse({'error': 'Método no permitido'}, status=405)
+
+    try:
+        data = json.loads(request.body)
+        lat = data.get('lat')
+        lng = data.get('lng')
+        if lat is None or lng is None:
+            return JsonResponse({'error': 'lat y lng son obligatorios'}, status=400)
+
+        viaje = Viaje.objects.get(id=viaje_id, activo=True, iniciado=True, finalizado=False)
+        viaje.conductor_lat_actual = lat
+        viaje.conductor_lng_actual = lng
+        viaje.conductor_ubicacion_actualizada_en = now()
+        viaje.save(
+            update_fields=[
+                'conductor_lat_actual',
+                'conductor_lng_actual',
+                'conductor_ubicacion_actualizada_en',
+            ]
+        )
+
+        cerrado = _cerrar_viaje_si_corresponde(viaje)
+        return JsonResponse({'message': 'Ubicación actualizada', 'viaje_finalizado': cerrado}, status=200)
+    except Viaje.DoesNotExist:
+        return JsonResponse({'error': 'Viaje no encontrado'}, status=404)
+    except Exception as e:
+        return JsonResponse({'error': str(e)}, status=500)
+
+
+@csrf_exempt
+def solicitar_parada_pasajero(request, asignacion_id):
+    if request.method != 'POST':
+        return JsonResponse({'error': 'Método no permitido'}, status=405)
+
+    try:
+        data = json.loads(request.body) if request.body else {}
+        asignacion = Asignacion.objects.select_related('viaje').get(
+            id=asignacion_id,
+            activo=True,
+            asignado=True,
+            abordo_confirmado=True,
+            descenso_confirmado=False,
+        )
+        viaje = asignacion.viaje
+        if not viaje.iniciado or not viaje.activo or viaje.finalizado:
+            return JsonResponse({'error': 'El viaje no está en curso'}, status=400)
+
+        objetivo_lat = data.get('lat', asignacion.destino_lat or viaje.destino_lat)
+        objetivo_lng = data.get('lng', asignacion.destino_lng or viaje.destino_lng)
+        if objetivo_lat is None or objetivo_lng is None:
+            return JsonResponse({'error': 'No hay coordenadas de parada disponibles'}, status=400)
+
+        origen_lat = viaje.conductor_lat_actual or viaje.origen_lat
+        origen_lng = viaje.conductor_lng_actual or viaje.origen_lng
+        referencia_lat, referencia_lng = _punto_antes_de_objetivo(
+            origen_lat,
+            origen_lng,
+            objetivo_lat,
+            objetivo_lng,
+            metros_antes=200,
+        )
+
+        asignacion.parada_solicitada = True
+        asignacion.parada_solicitada_en = now()
+        asignacion.parada_objetivo_lat = objetivo_lat
+        asignacion.parada_objetivo_lng = objetivo_lng
+        asignacion.parada_referencia_lat = referencia_lat
+        asignacion.parada_referencia_lng = referencia_lng
+        asignacion.save(
+            update_fields=[
+                'parada_solicitada',
+                'parada_solicitada_en',
+                'parada_objetivo_lat',
+                'parada_objetivo_lng',
+                'parada_referencia_lat',
+                'parada_referencia_lng',
+            ]
+        )
+
+        return JsonResponse({'message': 'Parada solicitada'}, status=200)
+    except Asignacion.DoesNotExist:
+        return JsonResponse({'error': 'Asignación no encontrada'}, status=404)
+    except Exception as e:
+        return JsonResponse({'error': str(e)}, status=500)
+
+
+@csrf_exempt
+def actualizar_estado_parada(request, asignacion_id):
+    if request.method != 'POST':
+        return JsonResponse({'error': 'Método no permitido'}, status=405)
+
+    try:
+        data = json.loads(request.body)
+        accion = data.get('accion')
+        asignacion = Asignacion.objects.select_related('viaje').get(id=asignacion_id, asignado=True)
+
+        if accion == 'baje_del_vehiculo':
+            asignacion.descenso_confirmado = True
+            asignacion.descenso_confirmado_en = now()
+            asignacion.parada_solicitada = False
+            asignacion.parada_solicitada_en = None
+            asignacion.parada_objetivo_lat = None
+            asignacion.parada_objetivo_lng = None
+            asignacion.parada_referencia_lat = None
+            asignacion.parada_referencia_lng = None
+            asignacion.save(
+                update_fields=[
+                    'descenso_confirmado',
+                    'descenso_confirmado_en',
+                    'parada_solicitada',
+                    'parada_solicitada_en',
+                    'parada_objetivo_lat',
+                    'parada_objetivo_lng',
+                    'parada_referencia_lat',
+                    'parada_referencia_lng',
+                ]
+            )
+            cerrado = _cerrar_viaje_si_corresponde(asignacion.viaje)
+            return JsonResponse({'message': 'Descenso confirmado', 'viaje_finalizado': cerrado}, status=200)
+
+        if accion == 'no_realizo_parada':
+            asignacion.parada_solicitada = False
+            asignacion.parada_solicitada_en = None
+            asignacion.parada_objetivo_lat = None
+            asignacion.parada_objetivo_lng = None
+            asignacion.parada_referencia_lat = None
+            asignacion.parada_referencia_lng = None
+            asignacion.save(
+                update_fields=[
+                    'parada_solicitada',
+                    'parada_solicitada_en',
+                    'parada_objetivo_lat',
+                    'parada_objetivo_lng',
+                    'parada_referencia_lat',
+                    'parada_referencia_lng',
+                ]
+            )
+            return JsonResponse({'message': 'Parada cancelada'}, status=200)
+
+        return JsonResponse({'error': 'Acción no válida'}, status=400)
+    except Asignacion.DoesNotExist:
+        return JsonResponse({'error': 'Asignación no encontrada'}, status=404)
+    except Exception as e:
+        return JsonResponse({'error': str(e)}, status=500)
+
+
+@csrf_exempt
+def crear_reporte(request):
+    if request.method != 'POST':
+        return JsonResponse({'error': 'Método no permitido'}, status=405)
+
+    try:
+        data = json.loads(request.body)
+        usuario_id = data.get('usuario_id')
+        viaje_id = data.get('viaje_id')
+        descripcion = (data.get('descripcion') or '').strip()
+        rol_reportante = (data.get('rol_reportante') or 'pasajero').strip()
+        categoria = (data.get('categoria') or 'viaje_en_curso').strip()
+        canal_preferido = (data.get('canal_preferido') or 'correo').strip()
+
+        if not usuario_id or not viaje_id or not descripcion:
+            return JsonResponse(
+                {'error': 'usuario_id, viaje_id y descripcion son obligatorios'},
+                status=400,
+            )
+
+        usuario = Usuario.objects.get(id=usuario_id)
+        viaje = Viaje.objects.get(id=viaje_id)
+
+        reporte = Reporte.objects.create(
+            usuario=usuario,
+            viaje=viaje,
+            rol_reportante=rol_reportante,
+            categoria=categoria,
+            descripcion=descripcion,
+            canal_preferido=canal_preferido,
+        )
+
+        return JsonResponse(
+            {
+                'message': 'Reporte enviado correctamente',
+                'reporte_id': reporte.id,
+            },
+            status=201,
+        )
+    except Usuario.DoesNotExist:
+        return JsonResponse({'error': 'Usuario no encontrado'}, status=404)
+    except Viaje.DoesNotExist:
+        return JsonResponse({'error': 'Viaje no encontrado'}, status=404)
+    except Exception as e:
+        return JsonResponse({'error': str(e)}, status=500)
+
+
+@csrf_exempt
+def forzar_viaje_en_curso_conductor(request, conductor_id):
+    if request.method != 'POST':
+        return JsonResponse({'error': 'Método no permitido'}, status=405)
+
+    try:
+        viaje = (
+            Viaje.objects.filter(
+                conductor_id=conductor_id,
+                activo=True,
+                finalizado=False,
+            )
+            .order_by('-fecha_viaje', '-id')
+            .first()
+        )
+
+        if not viaje:
+            return JsonResponse({'error': 'No hay viajes activos para este conductor'}, status=404)
+
+        asignacion = (
+            Asignacion.objects.filter(viaje=viaje, asignado=True, activo=True)
+            .order_by('id')
+            .first()
+        )
+        viaje = _forzar_viaje_en_curso(viaje, asignacion_prioritaria=asignacion)
+        return JsonResponse({'message': 'Viaje temporal forzado', 'viaje_id': viaje.id}, status=200)
+    except Exception as e:
+        return JsonResponse({'error': str(e)}, status=500)
+
+
+@csrf_exempt
+def forzar_viaje_en_curso_pasajero(request, pasajero_id):
+    if request.method != 'POST':
+        return JsonResponse({'error': 'Método no permitido'}, status=405)
+
+    try:
+        asignacion = (
+            Asignacion.objects.filter(
+                pasajero_id=pasajero_id,
+                asignado=True,
+                activo=True,
+                viaje__activo=True,
+                viaje__finalizado=False,
+            )
+            .select_related('viaje')
+            .order_by('-viaje__fecha_viaje', '-viaje__id')
+            .first()
+        )
+
+        if not asignacion:
+            return JsonResponse({'error': 'No hay asignaciones activas para este pasajero'}, status=404)
+
+        viaje = _forzar_viaje_en_curso(asignacion.viaje, asignacion_prioritaria=asignacion)
+        return JsonResponse({'message': 'Viaje temporal forzado', 'viaje_id': viaje.id}, status=200)
+    except Exception as e:
+        return JsonResponse({'error': str(e)}, status=500)
