@@ -1,282 +1,197 @@
-# FimeRide Backend - Testing Guide
+# FimeRide Backend - Guía de Pruebas
 
-## 🔧 Setup for Testing
+Esta guía detalla cómo configurar el entorno de desarrollo y probar los diferentes endpoints de la API de FimeRide.
 
-### 1. Environment Variables (.env)
+## 🔧 Configuración para Pruebas
 
-The project now includes a comprehensive `.env` file with all required variables:
+### 1. Variables de Entorno (.env)
 
-#### **Required Variables:**
+El proyecto requiere un archivo `.env` en la raíz con las siguientes variables:
 
-- **SECRET_KEY**: Django secret key (already set for dev)
-- **DEBUG**: Set to `True` for testing (enables all IPs and disables security features)
-- **DATABASE_URL**: PostgreSQL connection string
-- **AWS_ACCESS_KEY_ID**: AWS Access Key for S3 file uploads
-- **AWS_SECRET_ACCESS_KEY**: AWS Secret Key for S3
-- **TOKEN_SEGURO**: Custom security token used in the app
-- **TOKEN_MAPBOX**: Mapbox API token for map features
+- **SECRET_KEY**: Clave secreta de Django.
+- **DEBUG**: Debe ser `True` para habilitar el acceso desde cualquier IP y desactivar funciones de seguridad restrictivas durante el desarrollo.
+- **DATABASE_URL**: Cadena de conexión para PostgreSQL (ej. `postgres://admin:admin@localhost:5432/fimeride`).
+- **AWS_ACCESS_KEY_ID** / **AWS_SECRET_ACCESS_KEY**: Credenciales de AWS para S3 y Rekognition.
+- **TOKEN_SEGURO**: Token de seguridad personalizado usado en la app.
+- **TOKEN_MAPBOX**: Token de la API de Mapbox para funciones de mapas.
 
-#### **What to update:**
+### 2. Configuración de Base de Datos (Docker)
 
-1. **AWS Credentials**: Replace placeholder values with your actual AWS credentials
-2. **TOKEN_MAPBOX**: Add your Mapbox token (get one at https://mapbox.com)
-3. **DATABASE_URL** (optional): Update if using different database credentials
-
-### 2. Debug Mode Configuration
-
-✅ **Debug mode is now enabled!** When `DEBUG=True`:
-
-- **ALLOWED_HOSTS = ["*"]** → All IP addresses are allowed
-- **CORS_ALLOW_ALL_ORIGINS = True** → All origins accepted for API calls
-- **Security features disabled** → No SSL redirect, no secure cookies
-- **Perfect for testing from any device/IP**
-
-### 3. Database Setup
-
-Using Docker PostgreSQL (recommended):
+Se recomienda usar PostgreSQL mediante Docker:
 
 ```bash
-# Start PostgreSQL container
+# Iniciar contenedor
 docker run --name fimeride-db \
   -e POSTGRES_USER=admin \
   -e POSTGRES_PASSWORD=admin \
   -e POSTGRES_DB=fimeride \
   -p 5432:5432 \
   -d postgres
-
-# Verify container is running
-docker ps | grep fimeride-db
-
-# Stop database (when needed)
-docker stop fimeride-db
-
-# Start existing container (after first run)
-docker start fimeride-db
-
-# View database logs
-docker logs fimeride-db
-
-# Connect to database directly (optional)
-docker exec -it fimeride-db psql -U admin -d fimeride
 ```
 
-**Note**: The `.env` file is already configured for this Docker setup.
-
-### 4. Install Dependencies
+### 3. Instalación y Ejecución
 
 ```bash
-# Activate virtual environment (if using one)
-source venv/bin/activate  # Linux/macOS
-# or
-venv\Scripts\activate  # Windows
-
-# Install all requirements
+# Instalar dependencias
 pip install -r requirements.txt
-```
 
-### 5. Run Migrations
-
-```bash
-python manage.py makemigrations
+# Aplicar migraciones
 python manage.py migrate
-```
 
-### 6. Create Superuser (Optional)
-
-```bash
-python manage.py createsuperuser
-```
-
-### 7. Run Development Server
-
-```bash
+# Iniciar servidor
 python manage.py runserver 0.0.0.0:8000
 ```
 
-The server will be accessible from:
-- Local: http://localhost:8000
-- Network: http://YOUR_IP:8000 (accessible from other devices on your network)
+---
+
+## 📡 Endpoints de la API
+
+Todos los endpoints tienen el prefijo `/api/`.
+
+### 🔐 Autenticación y Registro
+
+#### Login de Usuario
+- **URL**: `POST /api/login/`
+- **Cuerpo (JSON)**: `{"username": "matricula", "password": "password"}`
+- **Respuesta**: Retorna `usuario_id`, `conductor_id`, `pasajero_id` y el nombre del usuario.
+
+#### Registro de Usuario (Pasajero)
+- **URL**: `POST /api/registrar/`
+- **Cuerpo (Multipart/Form-Data)**:
+  - `nombre_completo`, `correo_universitario`, `matricula`, `contraseña`.
+  - `foto_perfil` (Archivo imagen).
+  - `credencial_frontal`, `credencial_trasera` (Archivos imagen).
+  - `boleta_rectoria` (Archivo PDF/Imagen).
+  - `solicito_conductor` (bool, opcional).
+
+#### Registro de Conductor (Documentación Extra)
+- **URL**: `POST /api/registrar_conductor/`
+- **Cuerpo (Multipart/Form-Data)**:
+  - `usuario_id` (int).
+  - `licencia_frontal`, `licencia_trasera` (Archivos imagen).
+  - `identificacion_frontal`, `identificacion_trasera` (Archivos imagen).
+  - `poliza_seguro` (Archivo).
 
 ---
 
-## 📡 Testing Endpoints
+### 🚗 Gestión de Viajes
 
-### Available Endpoints:
+#### Listar Viajes Disponibles
+- **URL**: `GET /api/viajes/`
+- **Parámetros**: `conductor_id` (opcional, para excluir viajes propios).
+- **Descripción**: Lista viajes activos en los que el usuario puede unirse como pasajero.
 
-#### Authentication
-- `POST /usuarios/login/` - User login
-- `POST /usuarios/registrar/` - User registration
-- `POST /usuarios/registrar-conductor/` - Register as conductor
+#### Registrar Nuevo Viaje (Conductor)
+- **URL**: `POST /api/registrar_viaje/`
+- **Cuerpo (JSON)**:
+  - `direccion`, `es_hacia_fime`, `hora_salida`, `hora_llegada`, `descripcion`, `asientos_disponibles`, `costo`, `fecha_viaje`, `conductor_id`.
+  - Opcionales: `origen_lat`, `origen_lng`, `destino_lat`, `destino_lng`, `modelo_vehiculo`, `placas_vehiculo`.
 
-#### User Management
-- `GET /usuarios/info/<usuario_id>/` - Get user info
-- `GET /usuarios/estado-conductor/<conductor_id>/` - Get conductor status
+#### Acciones del Conductor sobre el Viaje
+- **URL**: `POST /api/viajes/<viaje_id>/accion_conductor/`
+- **Cuerpo (JSON)**: `{"accion": "confirmar" | "cancelar" | "esperar_5_mas" | "iniciar"}`
 
-#### Trips (Viajes)
-- `GET /usuarios/viajes/` - List available trips
-- `POST /usuarios/registrar-viaje/` - Register new trip
-- `GET /usuarios/viajes-realizados-pasajero/<pasajero_id>/` - Passenger trip history
-- `GET /usuarios/viajes-realizados-conductor/<conductor_id>/` - Conductor trip history
+#### Actualizar Ubicación en Tiempo Real
+- **URL**: `POST /api/viajes/<viaje_id>/ubicacion_conductor/`
+- **Cuerpo (JSON)**: `{"lat": float, "lng": float}`
 
-#### Assignments (Asignaciones)
-- `POST /usuarios/asignacion/` - Create trip assignment
-- `GET /usuarios/asignaciones-conductor/<conductor_id>/` - Get conductor assignments
-- `PATCH /usuarios/asignacion/<asignacion_id>/` - Update assignment status
+---
 
-#### Other
-- `GET /usuarios/token-mapbox/` - Get Mapbox token
+### 👥 Asignaciones (Pasajeros uniéndose a viajes)
 
-### Example API Testing
+#### Solicitar unirse a un viaje
+- **URL**: `POST /api/asignaciones/`
+- **Cuerpo (JSON)**: `{"pasajero_id": int, "viaje_id": int}`
 
-#### Using curl:
+#### Confirmar Abordaje (Pasajero)
+- **URL**: `PATCH /api/asignaciones/<asignacion_id>/abordo/`
+- **Descripción**: El pasajero confirma que ya subió al vehículo.
 
+#### Solicitar Parada (Pasajero en curso)
+- **URL**: `POST /api/asignaciones/<asignacion_id>/solicitar_parada/`
+- **Cuerpo (JSON)**: `{"lat": float, "lng": float}` (opcional).
+
+#### Actualizar Estado de Parada/Descenso
+- **URL**: `POST /api/asignaciones/<asignacion_id>/estado_parada/`
+- **Cuerpo (JSON)**: `{"accion": "baje_del_vehiculo" | "no_realizo_parada"}`
+
+---
+
+### 💬 Mensajería
+
+#### Enviar Mensaje
+- **URL**: `POST /api/mensajes/`
+- **Cuerpo (JSON)**: `{"enviado_por": id, "recibido_por": id, "id_viaje": id, "mensaje": "texto"}`
+
+#### Obtener Chats Activos
+- **URL**: `GET /api/mensajes/<usuario_id>/`
+- **Descripción**: Lista las últimas conversaciones del usuario.
+
+#### Obtener Historial de Chat
+- **URL**: `GET /api/mensajes/<usuario_id>/<otro_usuario_id>/<id_viaje>/`
+
+---
+
+### 🤖 Verificación IA (AWS Rekognition)
+
+#### Verificar Credencial contra Foto de Perfil
+- **URL**: `POST /api/verificar_credencial/`
+- **Cuerpo (Multipart)**: `usuario_id`, `credencial_frontal` (imagen).
+
+#### Verificar Boleta (Extracción de Matrícula)
+- **URL**: `POST /api/verificar_boleta/`
+- **Cuerpo (Multipart)**: `usuario_id`, `boleta_pdf` (archivo).
+
+#### Obtener Estado de Verificación IA
+- **URL**: `GET /api/usuario/<uid>/ai_status/`
+- **Respuesta**: Indica si hay rostro presente, si coincide con la credencial y si la boleta es válida.
+
+---
+
+### 📊 Otros
+
+#### Crear Reporte (Quejas/Soporte)
+- **URL**: `POST /api/reportes/`
+- **Cuerpo (JSON)**: `{"usuario_id": id, "viaje_id": id, "descripcion": "...", "rol_reportante": "pasajero"|"conductor", "categoria": "...", "canal_preferido": "..."}`
+
+#### Obtener Token de Mapbox
+- **URL**: `GET /api/mapbox-token/`
+
+#### Obtener Información de Usuario
+- **URL**: `GET /api/usuario/<usuario_id>/`
+
+---
+
+## 💡 Ejemplos de Prueba con curl
+
+### Iniciar Sesión
 ```bash
-# Test login
-curl -X POST http://localhost:8000/usuarios/login/ \
+curl -X POST http://localhost:8000/api/login/ \
   -H "Content-Type: application/json" \
-  -d '{"username": "20211234", "password": "your_password"}'
-
-# Get available trips
-curl http://localhost:8000/usuarios/viajes/?conductor_id=1
-
-# Get Mapbox token
-curl http://localhost:8000/usuarios/token-mapbox/
+  -d '{"username": "20211234", "password": "mipassword"}'
 ```
 
-#### Using Python requests:
-
-```python
-import requests
-
-BASE_URL = "http://localhost:8000"
-
-# Login
-response = requests.post(f"{BASE_URL}/usuarios/login/", json={
-    "username": "20211234",
-    "password": "your_password"
-})
-print(response.json())
-
-# Get trips
-response = requests.get(f"{BASE_URL}/usuarios/viajes/", params={"conductor_id": 1})
-print(response.json())
-```
-
-#### Using Postman/Insomnia:
-1. Import the endpoints listed above
-2. Set base URL to `http://localhost:8000` or `http://YOUR_IP:8000`
-3. No authentication headers needed for most endpoints (uses CSRF exempt)
-
----
-
-## 📦 Requirements.txt Status
-
-✅ **All dependencies are present and correctly versioned:**
-
-- **Django 5.1.7** - Web framework
-- **djangorestframework 3.16.0** - REST API support
-- **django-cors-headers 4.7.0** - CORS handling
-- **python-dotenv 1.2.2** - Environment variable management
-- **dj-database-url 2.3.0** - Database URL parsing
-- **psycopg2-binary 2.9.10** - PostgreSQL adapter
-- **boto3 1.28.0 + django-storages 1.14.2** - AWS S3 integration
-- **Pillow 11.2.1** - Image handling
-- **gunicorn 23.0.0** - Production server (not needed for testing)
-
-**Note**: Both `psycopg2` and `psycopg2-binary` are present. This is fine for development but in production you typically only need one.
-
----
-
-## 🔍 Troubleshooting
-
-### Common Issues:
-
-1. **Database connection error**
-   - Verify Docker container is running: `docker ps | grep fimeride-db`
-   - Start container if stopped: `docker start fimeride-db`
-   - Check DATABASE_URL in .env matches your Docker setup
-   - Run migrations: `python manage.py migrate`
-
-2. **AWS S3 upload errors**
-   - Update AWS credentials in .env
-   - For testing without S3, comment out DEFAULT_FILE_STORAGE in settings.py
-
-3. **CORS errors**
-   - Verify DEBUG=True in .env
-   - Restart server after .env changes
-
-4. **Port already in use**
-   - Check if another process is using port 8000: `lsof -i :8000`
-   - Use different port: `python manage.py runserver 0.0.0.0:8001`
-   - Or for database port 5432: `docker ps -a | grep 5432`
-
-5. **Docker database issues**
-   - Container not starting: `docker logs fimeride-db`
-   - Port conflict: Stop other PostgreSQL instances or change port mapping
-   - Reset database: `docker stop fimeride-db && docker rm fimeride-db` then recreate
-
----
-
-## 🚀 Quick Start Commands
-
+### Crear un Viaje
 ```bash
-# 1. Start Docker database
-docker start fimeride-db
-# (or run the full docker run command if first time)
-
-# 2. Activate virtual environment and setup
-source venv/bin/activate
-pip install -r requirements.txt
-
-# 3. Run migrations
-python manage.py migrate
-
-# 4. Start development server
-python manage.py runserver 0.0.0.0:8000
-
-# Access from mobile device on same network
-# Find your IP: ip addr show | grep inet
-# Then use: http://YOUR_IP:8000
+curl -X POST http://localhost:8000/api/registrar_viaje/ \
+  -H "Content-Type: application/json" \
+  -d '{
+    "direccion": "Hacia FIME",
+    "es_hacia_fime": true,
+    "hora_salida": "07:00:00",
+    "hora_llegada": "07:30:00",
+    "descripcion": "Viaje matutino",
+    "asientos_disponibles": 3,
+    "costo": "15.00",
+    "fecha_viaje": "2025-05-10",
+    "conductor_id": 1
+  }'
 ```
 
 ---
 
-## 📝 Notes
+## 🔍 Solución de Problemas
 
-- **.env** is git-ignored for security
-- **.env.example** shows required variables without sensitive data
-- **Debug mode** should NEVER be used in production
-- **All IPs allowed** in debug mode - convenient for testing but insecure for production
-- Make sure to update AWS and Mapbox credentials before testing file uploads and maps
-
----
-
-## 🐳 Docker Quick Reference
-
-```bash
-# Start existing container
-docker start fimeride-db
-
-# Stop container
-docker stop fimeride-db
-
-# View container status
-docker ps -a | grep fimeride
-
-# View database logs
-docker logs fimeride-db
-
-# Access PostgreSQL shell
-docker exec -it fimeride-db psql -U admin -d fimeride
-
-# Remove container (WARNING: deletes data)
-docker stop fimeride-db && docker rm fimeride-db
-
-# Recreate from scratch
-docker run --name fimeride-db \
-  -e POSTGRES_USER=admin \
-  -e POSTGRES_PASSWORD=admin \
-  -e POSTGRES_DB=fimeride \
-  -p 5432:5432 \
-  -d postgres
-```
+1. **Error 403 (No autorizado)**: Algunos endpoints requieren autenticación JWT. Asegúrate de incluir el header `Authorization: Bearer <token>` si es necesario (el endpoint `/api/token/` genera tokens JWT estándar).
+2. **Error 405 (Método no permitido)**: Verifica si el endpoint requiere POST, GET, PATCH o DELETE.
+3. **Imágenes no cargan**: Verifica que `MEDIA_URL` y `MEDIA_ROOT` estén configurados en `settings.py` y que AWS S3 esté bien configurado si `DEBUG=False`.
