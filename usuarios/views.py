@@ -511,55 +511,6 @@ def login_usuario(request):
                 except UsuarioPasajero.DoesNotExist:
                     pass
 
-                foto_live = request.FILES.get('foto_live')
-                if foto_live:
-                    if foto_live.content_type not in ('image/jpeg', 'image/png'):
-                        return JsonResponse({'error': 'Formato de imagen invalido'}, status=400)
-                    if foto_live.size and foto_live.size > 5 * 1024 * 1024:
-                        return JsonResponse({'error': 'La imagen excede 5MB'}, status=400)
-
-                    foto_live_bytes = _read_file_bytes(foto_live)
-
-                    try:
-                        face_present, reason = verify_face_present(foto_live_bytes)
-                    except RekognitionError:
-                        logger.warning(
-                            'Rekognition verify_face_present failed usuario_id=%s',
-                            user.id,
-                        )
-                        face_present = None
-                        reason = None
-
-                    if face_present is False:
-                        return JsonResponse({'error': reason}, status=400)
-
-                    if face_present and not user.foto_perfil:
-                        return JsonResponse({'error': 'Foto de perfil no registrada'}, status=400)
-
-                    if face_present and user.foto_perfil:
-                        try:
-                            match, similarity = compare_faces_s3(
-                                user.foto_perfil.name,
-                                foto_live_bytes,
-                            )
-                            logger.info(
-                                'login_face_compare usuario_id=%s similarity=%s success=%s',
-                                user.id,
-                                similarity,
-                                match,
-                            )
-                        except RekognitionError:
-                            logger.warning(
-                                'Rekognition compare_faces_s3 failed usuario_id=%s',
-                                user.id,
-                            )
-                            match = True
-                        if not match:
-                            return JsonResponse(
-                                {'error': 'Rostro no coincide', 'similarity': similarity},
-                                status=403,
-                            )
-
                 # Devolver los IDs y el nombre completo en la respuesta
                 return JsonResponse({
                     'message': 'Inicio de sesión exitoso',

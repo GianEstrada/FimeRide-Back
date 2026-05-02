@@ -1,11 +1,6 @@
-from django.db import models
 from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, PermissionsMixin
 from django.db import models
-
-from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, PermissionsMixin
-from django.db import models
-
-import usuarios
+from django.utils.timezone import now
 
 class UsuarioManager(BaseUserManager):
     def create_user(self, matricula, password=None, **extra_fields):
@@ -153,9 +148,6 @@ class Asignacion(models.Model):
     def __str__(self):
         return f"Asignación {self.id} - Pasajero {self.pasajero.usuario.nombre_completo}"
     
-    from django.db import models
-from django.utils.timezone import now
-
 class Mensaje(models.Model):
     id = models.AutoField(primary_key=True)
     enviado_por = models.ForeignKey('Usuario', on_delete=models.CASCADE, related_name='mensajes_enviados')
