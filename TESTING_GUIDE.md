@@ -1,35 +1,40 @@
-# FimeRide Backend - Guía de Pruebas
+# FimeRide Backend - Guia de Pruebas
 
-Esta guía detalla cómo configurar el entorno de desarrollo y probar los diferentes endpoints de la API de FimeRide.
+Esta guia detalla como configurar el entorno de desarrollo y probar los diferentes endpoints de la API de FimeRide.
 
-## 🔧 Configuración para Pruebas
+## Configuracion para Pruebas
 
 ### 1. Variables de Entorno (.env)
 
-El proyecto requiere un archivo `.env` en la raíz con las siguientes variables:
+Crea un archivo `.env` en la raiz del proyecto. Las variables requeridas son:
 
-- **SECRET_KEY**: Clave secreta de Django.
-- **DEBUG**: Debe ser `True` para habilitar el acceso desde cualquier IP y desactivar funciones de seguridad restrictivas durante el desarrollo.
-- **DATABASE_URL**: Cadena de conexión para PostgreSQL (ej. `postgres://admin:admin@localhost:5432/fimeride`).
-- **AWS_ACCESS_KEY_ID** / **AWS_SECRET_ACCESS_KEY**: Credenciales de AWS para S3 y Rekognition.
-- **TOKEN_SEGURO**: Token de seguridad personalizado usado en la app.
-- **TOKEN_MAPBOX**: Token de la API de Mapbox para funciones de mapas.
+| Variable | Descripcion | Valor Ejemplo |
+|----------|-------------|---------------|
+| `SECRET_KEY` | Clave secreta de Django | `tu_clave_secreta` |
+| `DEBUG` | Activa el modo depuracion | `True` |
+| `DATABASE_URL` | URL de PostgreSQL (Opcional) | `postgres://user:pass@localhost:5432/db` |
+| `AWS_ACCESS_KEY_ID` | ID de acceso de AWS | `AKIA...` |
+| `AWS_SECRET_ACCESS_KEY` | Clave secreta de AWS | `wJalr...` |
+| `AWS_STORAGE_BUCKET_NAME` | Nombre del bucket S3 | `fimeridearchivos` |
+| `AWS_S3_REGION_NAME` | Region de S3 | `us-east-2` |
+| `AWS_REKOGNITION_REGION`| Region de AWS Rekognition | `us-east-2` |
+| `FACE_SIMILARITY_THRESHOLD`| Umbral de similitud facial | `80` |
+| `TOKEN_SEGURO` | Token de seguridad interno | `mi_token_seguro` |
+| `TOKEN_MAPBOX` | Token de la API de Mapbox | `pk.eyJ...` |
 
-### 2. Configuración de Base de Datos (Docker)
+### 2. Base de Datos (SQLite vs PostgreSQL)
 
-Se recomienda usar PostgreSQL mediante Docker:
+Para desarrollo local rapido, puedes usar **SQLite** (no requiere instalacion adicional):
+- Simplemente **no definas** `DATABASE_URL` en tu archivo `.env`.
+- El sistema creara automaticamente un archivo `db.sqlite3` en la raiz.
 
+Si prefieres usar **PostgreSQL** con Docker:
 ```bash
-# Iniciar contenedor
-docker run --name fimeride-db \
-  -e POSTGRES_USER=admin \
-  -e POSTGRES_PASSWORD=admin \
-  -e POSTGRES_DB=fimeride \
-  -p 5432:5432 \
-  -d postgres
+docker run --name fimeride-db -e POSTGRES_PASSWORD=admin -e POSTGRES_DB=fimeride -p 5432:5432 -d postgres
+# Luego agrega DATABASE_URL=postgres://postgres:admin@localhost:5432/fimeride a tu .env
 ```
 
-### 3. Instalación y Ejecución
+### 3. Instalacion y Ejecucion
 
 ```bash
 # Instalar dependencias
@@ -38,138 +43,68 @@ pip install -r requirements.txt
 # Aplicar migraciones
 python manage.py migrate
 
+# Crear un superusuario (opcional, para el panel de admin)
+python manage.py createsuperuser
+
 # Iniciar servidor
-python manage.py runserver 0.0.0.0:8000
+python manage.py runserver
 ```
 
 ---
 
-## 📡 Endpoints de la API
+## Endpoints de la API
 
 Todos los endpoints tienen el prefijo `/api/`.
 
-### 🔐 Autenticación y Registro
+### Autenticacion y Perfil
 
-#### Login de Usuario
-- **URL**: `POST /api/login/`
-- **Cuerpo (JSON)**: `{"username": "matricula", "password": "password"}`
-- **Respuesta**: Retorna `usuario_id`, `conductor_id`, `pasajero_id` y el nombre del usuario.
+- `POST /api/login/`: Iniciar sesion. Retorna IDs y datos basicos.
+- `POST /api/registrar/`: Registro de usuario (pasajero). Requiere multipart (imagenes/PDF).
+- `POST /api/registrar_conductor/`: Registro de documentacion extra para conductores.
+- `POST /api/token/`: Obtener par de tokens JWT (SimpleJWT).
+- `GET /api/usuario/<id>/`: Obtener informacion detallada del usuario.
+- `POST /api/usuario/<id>/foto/`: Actualizar solo la foto de perfil.
 
-#### Registro de Usuario (Pasajero)
-- **URL**: `POST /api/registrar/`
-- **Cuerpo (Multipart/Form-Data)**:
-  - `nombre_completo`, `correo_universitario`, `matricula`, `contraseña`.
-  - `foto_perfil` (Archivo imagen).
-  - `credencial_frontal`, `credencial_trasera` (Archivos imagen).
-  - `boleta_rectoria` (Archivo PDF/Imagen).
-  - `solicito_conductor` (bool, opcional).
+### Gestion de Viajes
 
-#### Registro de Conductor (Documentación Extra)
-- **URL**: `POST /api/registrar_conductor/`
-- **Cuerpo (Multipart/Form-Data)**:
-  - `usuario_id` (int).
-  - `licencia_frontal`, `licencia_trasera` (Archivos imagen).
-  - `identificacion_frontal`, `identificacion_trasera` (Archivos imagen).
-  - `poliza_seguro` (Archivo).
+- `GET /api/viajes/`: Listar viajes disponibles (puedes filtrar por `conductor_id` para excluir propios).
+- `POST /api/registrar_viaje/`: Crear un nuevo viaje.
+- `GET /api/conductor_estado/<id>/`: Verificar el estado actual de un conductor.
+- `POST /api/viajes/<id>/accion_conductor/`: Acciones: `confirmar`, `cancelar`, `esperar_5_mas`, `iniciar`.
+- `POST /api/viajes/<id>/ubicacion_conductor/`: Actualizar lat/lng en tiempo real.
+- `GET /api/viajes/conductor/<id>/en_curso/`: Obtener viaje actual del conductor.
+- `GET /api/viajes/pasajero/<id>/en_curso/`: Obtener viaje actual del pasajero.
+- `POST /api/viajes/conductor/<id>/forzar_en_curso/`: Forzar estado de viaje en curso (Debug).
+- `POST /api/viajes/pasajero/<id>/forzar_en_curso/`: Forzar estado de viaje en curso (Debug).
+- `GET /api/viajes_realizados/conductor/<id>/`: Historial de viajes del conductor.
+- `GET /api/viajes_realizados/pasajero/<id>/`: Historial de viajes del pasajero.
 
----
+### Asignaciones y Paradas
 
-### 🚗 Gestión de Viajes
+- `POST /api/asignaciones/`: Solicitar unirse a un viaje.
+- `GET /api/asignaciones/conductor/<id>/`: Listar pasajeros asignados al viaje del conductor.
+- `PATCH /api/asignaciones/<id>/`: Actualizar datos de una asignacion.
+- `PATCH /api/asignaciones/<id>/abordo/`: Confirmar que el pasajero subio al vehiculo.
+- `POST /api/asignaciones/<id>/solicitar_parada/`: Solicitar descenso en coordenadas especificas.
+- `POST /api/asignaciones/<id>/estado_parada/`: Acciones: `baje_del_vehiculo`, `no_realizo_parada`.
+- `GET /api/recordatorios/conductor/<id>/`: Recordatorios de proximos viajes.
+- `GET /api/recordatorios/pasajero/<id>/`: Recordatorios de proximos viajes.
 
-#### Listar Viajes Disponibles
-- **URL**: `GET /api/viajes/`
-- **Parámetros**: `conductor_id` (opcional, para excluir viajes propios).
-- **Descripción**: Lista viajes activos en los que el usuario puede unirse como pasajero.
+### Mensajeria
 
-#### Registrar Nuevo Viaje (Conductor)
-- **URL**: `POST /api/registrar_viaje/`
-- **Cuerpo (JSON)**:
-  - `direccion`, `es_hacia_fime`, `hora_salida`, `hora_llegada`, `descripcion`, `asientos_disponibles`, `costo`, `fecha_viaje`, `conductor_id`.
-  - Opcionales: `origen_lat`, `origen_lng`, `destino_lat`, `destino_lng`, `modelo_vehiculo`, `placas_vehiculo`.
+- `POST /api/mensajes/`: Enviar un mensaje.
+- `GET /api/mensajes/<id>/`: Listar conversaciones activas del usuario.
+- `GET /api/mensajes/<usuario_id>/<otro_id>/<viaje_id>/`: Obtener historial de chat especifico.
 
-#### Acciones del Conductor sobre el Viaje
-- **URL**: `POST /api/viajes/<viaje_id>/accion_conductor/`
-- **Cuerpo (JSON)**: `{"accion": "confirmar" | "cancelar" | "esperar_5_mas" | "iniciar"}`
+### Verificacion IA (AWS Rekognition)
 
-#### Actualizar Ubicación en Tiempo Real
-- **URL**: `POST /api/viajes/<viaje_id>/ubicacion_conductor/`
-- **Cuerpo (JSON)**: `{"lat": float, "lng": float}`
-
----
-
-### 👥 Asignaciones (Pasajeros uniéndose a viajes)
-
-#### Solicitar unirse a un viaje
-- **URL**: `POST /api/asignaciones/`
-- **Cuerpo (JSON)**: `{"pasajero_id": int, "viaje_id": int}`
-
-#### Confirmar Abordaje (Pasajero)
-- **URL**: `PATCH /api/asignaciones/<asignacion_id>/abordo/`
-- **Descripción**: El pasajero confirma que ya subió al vehículo.
-
-#### Solicitar Parada (Pasajero en curso)
-- **URL**: `POST /api/asignaciones/<asignacion_id>/solicitar_parada/`
-- **Cuerpo (JSON)**: `{"lat": float, "lng": float}` (opcional).
-
-#### Actualizar Estado de Parada/Descenso
-- **URL**: `POST /api/asignaciones/<asignacion_id>/estado_parada/`
-- **Cuerpo (JSON)**: `{"accion": "baje_del_vehiculo" | "no_realizo_parada"}`
+- `POST /api/verificar_credencial/`: Compara foto de perfil vs credencial (Multipart).
+- `POST /api/verificar_boleta/`: Extrae matricula de PDF/Imagen de boleta de rectoria.
+- `GET /api/usuario/<id>/ai_status/`: Consulta si el usuario paso las validaciones de IA.
 
 ---
 
-### 💬 Mensajería
-
-#### Enviar Mensaje
-- **URL**: `POST /api/mensajes/`
-- **Cuerpo (JSON)**: `{"enviado_por": id, "recibido_por": id, "id_viaje": id, "mensaje": "texto"}`
-
-#### Obtener Chats Activos
-- **URL**: `GET /api/mensajes/<usuario_id>/`
-- **Descripción**: Lista las últimas conversaciones del usuario.
-
-#### Obtener Historial de Chat
-- **URL**: `GET /api/mensajes/<usuario_id>/<otro_usuario_id>/<id_viaje>/`
-
----
-
-### 🤖 Verificación IA (AWS Rekognition)
-
-#### Verificar Credencial contra Foto de Perfil
-- **URL**: `POST /api/verificar_credencial/`
-- **Cuerpo (Multipart)**: `usuario_id`, `credencial_frontal` (imagen).
-
-#### Verificar Boleta (Extracción de Matrícula)
-- **URL**: `POST /api/verificar_boleta/`
-- **Cuerpo (Multipart)**: `usuario_id`, `boleta_pdf` (archivo).
-
-#### Obtener Estado de Verificación IA
-- **URL**: `GET /api/usuario/<uid>/ai_status/`
-- **Respuesta**: Indica si hay rostro presente, si coincide con la credencial y si la boleta es válida.
-
----
-
-### 📊 Otros
-
-#### Crear Reporte (Quejas/Soporte)
-- **URL**: `POST /api/reportes/`
-- **Cuerpo (JSON)**: `{"usuario_id": id, "viaje_id": id, "descripcion": "...", "rol_reportante": "pasajero"|"conductor", "categoria": "...", "canal_preferido": "..."}`
-
-#### Obtener Token de Mapbox
-- **URL**: `GET /api/mapbox-token/`
-
-#### Obtener Información de Usuario
-- **URL**: `GET /api/usuario/<usuario_id>/`
-
----
-
-## 💡 Ejemplos de Prueba con curl
-
-### Iniciar Sesión
-```bash
-curl -X POST http://localhost:8000/api/login/ \
-  -H "Content-Type: application/json" \
-  -d '{"username": "20211234", "password": "mipassword"}'
-```
+## Ejemplos con curl
 
 ### Crear un Viaje
 ```bash
@@ -178,9 +113,7 @@ curl -X POST http://localhost:8000/api/registrar_viaje/ \
   -d '{
     "direccion": "Hacia FIME",
     "es_hacia_fime": true,
-    "hora_salida": "07:00:00",
-    "hora_llegada": "07:30:00",
-    "descripcion": "Viaje matutino",
+    "hora_salida": "07:00",
     "asientos_disponibles": 3,
     "costo": "15.00",
     "fecha_viaje": "2025-05-10",
@@ -190,8 +123,8 @@ curl -X POST http://localhost:8000/api/registrar_viaje/ \
 
 ---
 
-## 🔍 Solución de Problemas
+## Solucion de Problemas
 
-1. **Error 403 (No autorizado)**: Algunos endpoints requieren autenticación JWT. Asegúrate de incluir el header `Authorization: Bearer <token>` si es necesario (el endpoint `/api/token/` genera tokens JWT estándar).
-2. **Error 405 (Método no permitido)**: Verifica si el endpoint requiere POST, GET, PATCH o DELETE.
-3. **Imágenes no cargan**: Verifica que `MEDIA_URL` y `MEDIA_ROOT` estén configurados en `settings.py` y que AWS S3 esté bien configurado si `DEBUG=False`.
+1. **SQLite**: Si tienes problemas de permisos, asegurate de que el usuario tenga escritura en la carpeta raiz.
+2. **AWS**: Si los endpoints de IA fallan, verifica que tus credenciales tengan permisos para `Rekognition` y `S3`.
+3. **CORS**: En desarrollo local, `CORS_ALLOW_ALL_ORIGINS` esta en `True` si `DEBUG=True`.
