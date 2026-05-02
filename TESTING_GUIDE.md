@@ -52,73 +52,56 @@ python manage.py runserver
 
 ---
 
-## Endpoints de la API
+## Nuevas Funcionalidades (Rama: integration/rekognition)
 
-Todos los endpoints tienen el prefijo `/api/`.
-
-### Autenticacion y Perfil
-
-- `POST /api/login/`: Iniciar sesion. Retorna IDs y datos basicos.
-- `POST /api/registrar/`: Registro de usuario (pasajero). Requiere multipart (imagenes/PDF).
-- `POST /api/registrar_conductor/`: Registro de documentacion extra para conductores.
-- `POST /api/token/`: Obtener par de tokens JWT (SimpleJWT).
-- `GET /api/usuario/<id>/`: Obtener informacion detallada del usuario.
-- `POST /api/usuario/<id>/foto/`: Actualizar solo la foto de perfil.
-
-### Gestion de Viajes
-
-- `GET /api/viajes/`: Listar viajes disponibles (puedes filtrar por `conductor_id` para excluir propios).
-- `POST /api/registrar_viaje/`: Crear un nuevo viaje.
-- `GET /api/conductor_estado/<id>/`: Verificar el estado actual de un conductor.
-- `POST /api/viajes/<id>/accion_conductor/`: Acciones: `confirmar`, `cancelar`, `esperar_5_mas`, `iniciar`.
-- `POST /api/viajes/<id>/ubicacion_conductor/`: Actualizar lat/lng en tiempo real.
-- `GET /api/viajes/conductor/<id>/en_curso/`: Obtener viaje actual del conductor.
-- `GET /api/viajes/pasajero/<id>/en_curso/`: Obtener viaje actual del pasajero.
-- `POST /api/viajes/conductor/<id>/forzar_en_curso/`: Forzar estado de viaje en curso (Debug).
-- `POST /api/viajes/pasajero/<id>/forzar_en_curso/`: Forzar estado de viaje en curso (Debug).
-- `GET /api/viajes_realizados/conductor/<id>/`: Historial de viajes del conductor.
-- `GET /api/viajes_realizados/pasajero/<id>/`: Historial de viajes del pasajero.
-
-### Asignaciones y Paradas
-
-- `POST /api/asignaciones/`: Solicitar unirse a un viaje.
-- `GET /api/asignaciones/conductor/<id>/`: Listar pasajeros asignados al viaje del conductor.
-- `PATCH /api/asignaciones/<id>/`: Actualizar datos de una asignacion.
-- `PATCH /api/asignaciones/<id>/abordo/`: Confirmar que el pasajero subio al vehiculo.
-- `POST /api/asignaciones/<id>/solicitar_parada/`: Solicitar descenso en coordenadas especificas.
-- `POST /api/asignaciones/<id>/estado_parada/`: Acciones: `baje_del_vehiculo`, `no_realizo_parada`.
-- `GET /api/recordatorios/conductor/<id>/`: Recordatorios de proximos viajes.
-- `GET /api/recordatorios/pasajero/<id>/`: Recordatorios de proximos viajes.
-
-### Mensajeria
-
-- `POST /api/mensajes/`: Enviar un mensaje.
-- `GET /api/mensajes/<id>/`: Listar conversaciones activas del usuario.
-- `GET /api/mensajes/<usuario_id>/<otro_id>/<viaje_id>/`: Obtener historial de chat especifico.
+Esta rama introduce la verificacion automatizada de documentos mediante **AWS Rekognition**. A continuacion se detallan los endpoints especificos para probar estas funcionalidades.
 
 ### Verificacion IA (AWS Rekognition)
 
-- `POST /api/verificar_credencial/`: Compara foto de perfil vs credencial (Multipart).
-- `POST /api/verificar_boleta/`: Extrae matricula de PDF/Imagen de boleta de rectoria.
-- `GET /api/usuario/<id>/ai_status/`: Consulta si el usuario paso las validaciones de IA.
+- `POST /api/verificar_credencial/`: Compara la foto de perfil del usuario contra una foto de su credencial universitaria.
+  - **Payload (Multipart)**: `usuario_id`, `credencial_frontal` (imagen).
+  - **Logica**: Utiliza `compare_faces` de AWS Rekognition. El umbral de aceptacion se define en `.env` (`FACE_SIMILARITY_THRESHOLD`).
+
+- `POST /api/verificar_boleta/`: Valida el estatus de pago del alumno mediante la lectura de la boleta de rectoria.
+  - **Payload (Multipart)**: `usuario_id`, `boleta_pdf` (PDF o Imagen).
+  - **Logica**: Extrae texto mediante OCR. Busca la matricula del usuario y la leyenda "RECIBO PAGADO" para validar el documento.
+
+- `GET /api/usuario/<id>/ai_status/`: Consulta el estado consolidado de las validaciones de IA para un usuario.
+  - **Respuesta**: Retorna si la credencial y la boleta han sido autorizadas.
 
 ---
 
-## Ejemplos con curl
+## Guia de Pruebas Paso a Paso
 
-### Crear un Viaje
+### 1. Preparacion de Datos
+Asegurate de que el usuario tenga una foto de perfil cargada antes de verificar la credencial.
+Puedes usar el admin de Django o el endpoint `POST /api/usuario/<id>/foto/`.
+
+### 2. Ejecucion de Pruebas Automatizadas
+Se han incluido pruebas unitarias que utilizan mocks para AWS.
 ```bash
-curl -X POST http://localhost:8000/api/registrar_viaje/ \
-  -H "Content-Type: application/json" \
-  -d '{
-    "direccion": "Hacia FIME",
-    "es_hacia_fime": true,
-    "hora_salida": "07:00",
-    "asientos_disponibles": 3,
-    "costo": "15.00",
-    "fecha_viaje": "2025-05-10",
-    "conductor_id": 1
-  }'
+python manage.py test usuarios.tests.VerificationTests
+```
+
+### 3. Pruebas Manuales con curl
+
+#### Verificar Credencial
+```bash
+curl -X POST http://localhost:8000/api/verificar_credencial/ \
+  -F "usuario_id=1" \
+  -F "credencial_frontal=@/ruta/a/tu/foto_credencial.jpg"
+```
+
+#### Verificar Boleta
+```bash
+curl -X POST http://localhost:8000/api/verificar_boleta/ \
+  -F "usuario_id=1" \
+  -F "boleta_pdf=@/ruta/a/tu/boleta.pdf"
+```
+
+#### Consultar Estatus IA
+```bash
+curl -X GET http://localhost:8000/api/usuario/1/ai_status/
 ```
 
 ---
