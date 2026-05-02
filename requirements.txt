@@ -11,9 +11,10 @@ gunicorn==23.0.0
 jmespath==1.1.0
 packaging==25.0
 pillow==11.2.1
+pdf2image>=1.17.0
 psycopg2==2.9.10
-psycopg2-binary==2.9.10
 PyJWT==2.11.0
+pyzbar>=0.1.9
 python-dateutil==2.9.0.post0
 python-decouple==3.8
 python-dotenv==1.2.2

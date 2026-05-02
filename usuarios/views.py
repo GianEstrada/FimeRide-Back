@@ -1,20 +1,83 @@
+import io
 import json
+import logging
 import os
+import uuid
 from django.http import JsonResponse
+from django.http.multipartparser import MultiPartParser
 from django.views.decorators.csrf import csrf_exempt
 from .models import Asignacion, DocumentacionConductor, DocumentacionPasajero, Mensaje, Solicitud, Usuario, UsuarioConductor, UsuarioPasajero
 from django.db import transaction
 from django.conf import settings
 from django.utils.timezone import now
 from django.contrib.auth import authenticate
+from django.core.files.base import ContentFile
+from django.core.files.storage import default_storage
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from django.contrib.auth.decorators import login_required
 from django.utils.decorators import method_decorator
 import boto3
+from botocore.exceptions import BotoCoreError, ClientError
+from rest_framework_simplejwt.authentication import JWTAuthentication
+from PIL import Image
 from .models import Viaje
 from usuarios import models
 from django.db.models import Q
+from .rekognition_service import (
+    RekognitionError,
+    compare_faces_bytes,
+    compare_faces_s3,
+    verify_face_present,
+)
+from .barcode_service import extract_matricula_from_pdf
+
+
+logger = logging.getLogger(__name__)
+
+
+def _get_similarity_threshold():
+    raw_value = os.getenv("FACE_SIMILARITY_THRESHOLD", "80")
+    try:
+        return float(raw_value)
+    except ValueError:
+        return 80.0
+
+
+def _authenticate_jwt(request):
+    authenticator = JWTAuthentication()
+    try:
+        result = authenticator.authenticate(request)
+    except Exception:
+        return None, JsonResponse({"error": "Token invalido"}, status=401)
+    if result is None:
+        return None, JsonResponse({"error": "Token requerido"}, status=401)
+    user, _ = result
+    return user, None
+
+
+def _read_file_bytes(file_obj):
+    data = file_obj.read()
+    file_obj.seek(0)
+    return data
+
+
+def _normalize_profile_image(image_bytes):
+    try:
+        image = Image.open(io.BytesIO(image_bytes))
+        if image.mode != "RGB":
+            image = image.convert("RGB")
+        buffer = io.BytesIO()
+        image.save(buffer, format="JPEG", quality=90)
+        return buffer.getvalue()
+    except Exception as exc:
+        raise ValueError("Imagen invalida") from exc
+
+
+def _truncate_text(value, limit=200):
+    if not value:
+        return ""
+    return value[:limit]
 
 @api_view(['GET'])
 def obtener_token(request):
@@ -107,9 +170,16 @@ def registrar_viaje(request):
 def login_usuario(request):
     if request.method == 'POST':
         try:
-            data = json.loads(request.body)
+            if request.content_type and 'application/json' in request.content_type:
+                data = json.loads(request.body or '{}')
+            else:
+                data = request.POST
+
             matricula = data.get('username')
             password = data.get('password')
+
+            if not matricula or not password:
+                return JsonResponse({'error': 'Faltan credenciales'}, status=400)
 
             # Autenticar al usuario
             user = authenticate(request, username=matricula, password=password)
@@ -138,6 +208,55 @@ def login_usuario(request):
                         }, status=403)
                 except UsuarioPasajero.DoesNotExist:
                     pass
+
+                foto_live = request.FILES.get('foto_live')
+                if foto_live:
+                    if foto_live.content_type not in ('image/jpeg', 'image/png'):
+                        return JsonResponse({'error': 'Formato de imagen invalido'}, status=400)
+                    if foto_live.size and foto_live.size > 5 * 1024 * 1024:
+                        return JsonResponse({'error': 'La imagen excede 5MB'}, status=400)
+
+                    foto_live_bytes = _read_file_bytes(foto_live)
+
+                    try:
+                        face_present, reason = verify_face_present(foto_live_bytes)
+                    except RekognitionError:
+                        logger.warning(
+                            'Rekognition verify_face_present failed usuario_id=%s',
+                            user.id,
+                        )
+                        face_present = None
+                        reason = None
+
+                    if face_present is False:
+                        return JsonResponse({'error': reason}, status=400)
+
+                    if face_present and not user.foto_perfil:
+                        return JsonResponse({'error': 'Foto de perfil no registrada'}, status=400)
+
+                    if face_present and user.foto_perfil:
+                        try:
+                            match, similarity = compare_faces_s3(
+                                user.foto_perfil.name,
+                                foto_live_bytes,
+                            )
+                            logger.info(
+                                'login_face_compare usuario_id=%s similarity=%s success=%s',
+                                user.id,
+                                similarity,
+                                match,
+                            )
+                        except RekognitionError:
+                            logger.warning(
+                                'Rekognition compare_faces_s3 failed usuario_id=%s',
+                                user.id,
+                            )
+                            match = True
+                        if not match:
+                            return JsonResponse(
+                                {'error': 'Rostro no coincide', 'similarity': similarity},
+                                status=403,
+                            )
 
                 # Devolver los IDs y el nombre completo en la respuesta
                 return JsonResponse({
@@ -174,21 +293,13 @@ def registrar_usuario(request):
             usuario.set_password(data['contraseña'])  # Encripta la contraseña
 
             # Guardar foto de perfil si está presente
+            foto_perfil_bytes = None
             if 'foto_perfil' in request.FILES:
-                usuario.foto_perfil = request.FILES['foto_perfil']
-                print(usuario.foto_perfil.url)  # Nuevo campo
-                print("AWS_ACCESS_KEY_ID:", os.getenv('AWS_ACCESS_KEY_ID'))
-            print("AWS_SECRET_ACCESS_KEY:", os.getenv('AWS_SECRET_ACCESS_KEY'))
-
-# Verificar conexión a S3
-            s3 = boto3.client('s3')
-            response = s3.list_buckets()
-            print("Buckets disponibles:", response['Buckets'])
-            print("AWS_ACCESS_KEY_ID:", os.getenv('AWS_ACCESS_KEY_ID'))
-            print("AWS_SECRET_ACCESS_KEY:", os.getenv('AWS_SECRET_ACCESS_KEY'))
+                foto_perfil_file = request.FILES['foto_perfil']
+                foto_perfil_bytes = _read_file_bytes(foto_perfil_file)
+                usuario.foto_perfil = foto_perfil_file
 
             usuario.save()
-            print("Archivo guardado en:", usuario.foto_perfil.url)
             # Crear usuario pasajero
             pasajero = UsuarioPasajero.objects.create(usuario=usuario)
 
@@ -198,7 +309,8 @@ def registrar_usuario(request):
 
             credencial_frontal = request.FILES['credencial_frontal']
             credencial_trasera = request.FILES['credencial_trasera']
-            DocumentacionPasajero.objects.create(
+            credencial_frontal_bytes = _read_file_bytes(credencial_frontal)
+            credencial_frontal_doc = DocumentacionPasajero.objects.create(
                 pasajero=pasajero,
                 tipo_documento='credencial_universitaria',
                 documento=credencial_frontal,
@@ -215,7 +327,8 @@ def registrar_usuario(request):
                 return JsonResponse({'error': 'El archivo boleta_rectoria es obligatorio'}, status=400)
 
             boleta_rectoria = request.FILES['boleta_rectoria']
-            DocumentacionPasajero.objects.create(
+            boleta_bytes = _read_file_bytes(boleta_rectoria)
+            boleta_doc = DocumentacionPasajero.objects.create(
                 pasajero=pasajero,
                 tipo_documento='boleta_rectoria',
                 documento=boleta_rectoria,
@@ -236,6 +349,68 @@ def registrar_usuario(request):
                 aprobado_pasajero=False,
                 aprobado_conductor=False,
             )
+
+            if foto_perfil_bytes:
+                try:
+                    face_present, _reason = verify_face_present(foto_perfil_bytes)
+                    usuario.ai_face_present = face_present
+                    usuario.save(update_fields=['ai_face_present'])
+                    logger.info(
+                        'register_face_present usuario_id=%s success=%s',
+                        usuario.id,
+                        face_present,
+                    )
+                except RekognitionError:
+                    logger.warning(
+                        'Rekognition verify_face_present failed usuario_id=%s',
+                        usuario.id,
+                    )
+                except Exception:
+                    logger.warning('Face presence check failed usuario_id=%s', usuario.id)
+
+            if foto_perfil_bytes and credencial_frontal_bytes:
+                try:
+                    match, similarity = compare_faces_bytes(
+                        foto_perfil_bytes,
+                        credencial_frontal_bytes,
+                    )
+                    credencial_frontal_doc.ai_face_similarity = similarity
+                    credencial_frontal_doc.save(update_fields=['ai_face_similarity'])
+                    logger.info(
+                        'register_face_compare usuario_id=%s similarity=%s success=%s',
+                        usuario.id,
+                        similarity,
+                        match,
+                    )
+                except RekognitionError:
+                    logger.warning(
+                        'Rekognition compare_faces_bytes failed usuario_id=%s',
+                        usuario.id,
+                    )
+                except Exception:
+                    logger.warning('Face compare failed usuario_id=%s', usuario.id)
+
+            if boleta_bytes:
+                try:
+                    boleta_valid, _detected_text, method = extract_matricula_from_pdf(
+                        boleta_bytes,
+                        usuario.matricula,
+                    )
+                    boleta_doc.ai_boleta_valid = boleta_valid
+                    boleta_doc.save(update_fields=['ai_boleta_valid'])
+                    logger.info(
+                        'register_boleta_check usuario_id=%s success=%s method=%s',
+                        usuario.id,
+                        boleta_valid,
+                        method,
+                    )
+                except RekognitionError:
+                    logger.warning(
+                        'Rekognition detect_text failed usuario_id=%s',
+                        usuario.id,
+                    )
+                except Exception:
+                    logger.warning('Boleta validation failed usuario_id=%s', usuario.id)
 
             return JsonResponse({'message': 'Usuario registrado exitosamente', 'usuario_id': usuario.id}, status=201)
         except Exception as e:
@@ -547,3 +722,279 @@ def obtener_chat(request, usuario_id, otro_usuario_id, id_viaje):
             print(f"Error en obtener_chat: {e}")
             return JsonResponse({'error': str(e)}, status=500)
     return JsonResponse({'error': 'Método no permitido'}, status=405)
+
+
+@csrf_exempt
+def verificar_credencial(request):
+    if request.method != 'POST':
+        return JsonResponse({'error': 'Método no permitido'}, status=405)
+
+    auth_user, auth_error = _authenticate_jwt(request)
+    if auth_error:
+        return auth_error
+
+    usuario_id = request.POST.get('usuario_id')
+    credencial_frontal = request.FILES.get('credencial_frontal')
+
+    if not usuario_id or not credencial_frontal:
+        return JsonResponse({'error': 'usuario_id y credencial_frontal son obligatorios'}, status=400)
+
+    try:
+        usuario_id_int = int(usuario_id)
+    except (TypeError, ValueError):
+        return JsonResponse({'error': 'usuario_id invalido'}, status=400)
+
+    if not (auth_user.is_staff or auth_user.is_superuser) and auth_user.id != usuario_id_int:
+        return JsonResponse({'error': 'No autorizado'}, status=403)
+
+    if credencial_frontal.content_type not in ('image/jpeg', 'image/png'):
+        return JsonResponse({'error': 'Formato de imagen invalido'}, status=400)
+
+    try:
+        usuario = Usuario.objects.get(id=usuario_id_int)
+        pasajero = UsuarioPasajero.objects.filter(usuario=usuario).first()
+        if not pasajero:
+            return JsonResponse({'error': 'Pasajero no encontrado'}, status=404)
+
+        if not usuario.foto_perfil:
+            return JsonResponse({'error': 'Foto de perfil no registrada'}, status=400)
+
+        credencial_bytes = _read_file_bytes(credencial_frontal)
+        match, similarity = compare_faces_s3(usuario.foto_perfil.name, credencial_bytes)
+
+        doc = DocumentacionPasajero.objects.create(
+            pasajero=pasajero,
+            tipo_documento='credencial_universitaria',
+            documento=credencial_frontal,
+            necesita_autorizacion=True,
+            autorizado=match,
+            ai_face_similarity=similarity,
+        )
+
+        logger.info(
+            'verificar_credencial usuario_id=%s similarity=%s success=%s',
+            usuario.id,
+            similarity,
+            match,
+        )
+
+        return JsonResponse(
+            {
+                'match': match,
+                'similarity': similarity,
+                'message': 'Coincidencia encontrada' if match else 'No coincide',
+                'documento_id': doc.id,
+            },
+            status=200,
+        )
+    except RekognitionError:
+        logger.warning('Rekognition compare_faces_s3 failed usuario_id=%s', usuario_id_int)
+        return JsonResponse({'error': 'Verificacion no disponible'}, status=503)
+    except Usuario.DoesNotExist:
+        return JsonResponse({'error': 'Usuario no encontrado'}, status=404)
+    except Exception:
+        logger.exception('verificar_credencial error usuario_id=%s', usuario_id_int)
+        return JsonResponse({'error': 'Error interno'}, status=500)
+
+
+@csrf_exempt
+def verificar_boleta(request):
+    if request.method != 'POST':
+        return JsonResponse({'error': 'Método no permitido'}, status=405)
+
+    auth_user, auth_error = _authenticate_jwt(request)
+    if auth_error:
+        return auth_error
+
+    usuario_id = request.POST.get('usuario_id')
+    boleta_pdf = request.FILES.get('boleta_pdf')
+
+    if not usuario_id or not boleta_pdf:
+        return JsonResponse({'error': 'usuario_id y boleta_pdf son obligatorios'}, status=400)
+
+    try:
+        usuario_id_int = int(usuario_id)
+    except (TypeError, ValueError):
+        return JsonResponse({'error': 'usuario_id invalido'}, status=400)
+
+    if not (auth_user.is_staff or auth_user.is_superuser) and auth_user.id != usuario_id_int:
+        return JsonResponse({'error': 'No autorizado'}, status=403)
+
+    try:
+        usuario = Usuario.objects.get(id=usuario_id_int)
+        pasajero = UsuarioPasajero.objects.filter(usuario=usuario).first()
+        if not pasajero:
+            return JsonResponse({'error': 'Pasajero no encontrado'}, status=404)
+
+        boleta_bytes = _read_file_bytes(boleta_pdf)
+        valid, detected_text, method = extract_matricula_from_pdf(
+            boleta_bytes,
+            usuario.matricula,
+        )
+
+        doc = DocumentacionPasajero.objects.create(
+            pasajero=pasajero,
+            tipo_documento='boleta_rectoria',
+            documento=boleta_pdf,
+            necesita_autorizacion=False,
+            autorizado=valid,
+            ai_boleta_valid=valid,
+        )
+
+        logger.info(
+            'verificar_boleta usuario_id=%s success=%s method=%s',
+            usuario.id,
+            valid,
+            method,
+        )
+
+        return JsonResponse(
+            {
+                'valid': valid,
+                'detected_text': _truncate_text(detected_text),
+                'method': method,
+                'documento_id': doc.id,
+            },
+            status=200,
+        )
+    except RekognitionError:
+        logger.warning('Rekognition detect_text failed usuario_id=%s', usuario_id_int)
+        return JsonResponse({'error': 'Verificacion no disponible'}, status=503)
+    except Usuario.DoesNotExist:
+        return JsonResponse({'error': 'Usuario no encontrado'}, status=404)
+    except Exception:
+        logger.exception('verificar_boleta error usuario_id=%s', usuario_id_int)
+        return JsonResponse({'error': 'Error interno'}, status=500)
+
+
+@csrf_exempt
+def update_profile_photo(request, uid):
+    if request.method != 'PATCH':
+        return JsonResponse({'error': 'Método no permitido'}, status=405)
+
+    user, auth_error = _authenticate_jwt(request)
+    if auth_error:
+        return auth_error
+
+    if user.id != uid:
+        return JsonResponse({'error': 'No autorizado'}, status=403)
+
+    files = request.FILES
+    if not files and request.content_type and 'multipart/form-data' in request.content_type:
+        try:
+            _, files = MultiPartParser(request.META, request, request.upload_handlers).parse()
+        except Exception:
+            return JsonResponse({'error': 'Carga de archivo invalida'}, status=400)
+
+    foto_perfil = files.get('foto_perfil')
+    if not foto_perfil:
+        return JsonResponse({'error': 'foto_perfil es obligatoria'}, status=400)
+
+    if foto_perfil.content_type not in ('image/jpeg', 'image/png'):
+        return JsonResponse({'error': 'Formato de imagen invalido'}, status=400)
+
+    if foto_perfil.size and foto_perfil.size > 5 * 1024 * 1024:
+        return JsonResponse({'error': 'La imagen excede 5MB'}, status=400)
+
+    try:
+        usuario = Usuario.objects.get(id=uid)
+    except Usuario.DoesNotExist:
+        return JsonResponse({'error': 'Usuario no encontrado'}, status=404)
+
+    foto_bytes = _read_file_bytes(foto_perfil)
+    try:
+        face_present, reason = verify_face_present(foto_bytes)
+    except RekognitionError:
+        logger.warning('Rekognition verify_face_present failed usuario_id=%s', uid)
+        return JsonResponse({'error': 'Verificacion no disponible'}, status=503)
+
+    if not face_present:
+        return JsonResponse({'error': reason}, status=400)
+
+    try:
+        normalized_bytes = _normalize_profile_image(foto_bytes)
+    except ValueError:
+        return JsonResponse({'error': 'Imagen invalida'}, status=400)
+
+    old_key = usuario.foto_perfil.name if usuario.foto_perfil else None
+    if old_key:
+        try:
+            s3 = boto3.client('s3', region_name=settings.AWS_S3_REGION_NAME)
+            s3.delete_object(Bucket=settings.AWS_STORAGE_BUCKET_NAME, Key=old_key)
+        except (ClientError, BotoCoreError):
+            logger.warning('S3 delete failed usuario_id=%s', uid)
+
+    new_key = f"fotos_perfil/{uuid.uuid4()}.jpg"
+    content_file = ContentFile(normalized_bytes)
+    content_file.content_type = "image/jpeg"
+    storage_path = default_storage.save(new_key, content_file)
+
+    usuario.foto_perfil = storage_path
+    usuario.ai_face_present = True
+    usuario.save(update_fields=['foto_perfil', 'ai_face_present'])
+
+    foto_url = usuario.foto_perfil.url if usuario.foto_perfil else None
+    return JsonResponse({'foto_url': foto_url}, status=200)
+
+
+@csrf_exempt
+def get_ai_status(request, uid):
+    if request.method != 'GET':
+        return JsonResponse({'error': 'Método no permitido'}, status=405)
+
+    auth_user, auth_error = _authenticate_jwt(request)
+    if auth_error:
+        return auth_error
+
+    if not (auth_user.is_staff or auth_user.is_superuser) and auth_user.id != uid:
+        return JsonResponse({'error': 'No autorizado'}, status=403)
+
+    try:
+        usuario = Usuario.objects.get(id=uid)
+        pasajero = UsuarioPasajero.objects.filter(usuario=usuario).first()
+        face_similarity = None
+        credential_match = None
+        boleta_valid = None
+
+        if pasajero:
+            cred_doc = (
+                DocumentacionPasajero.objects.filter(
+                    pasajero=pasajero,
+                    tipo_documento='credencial_universitaria',
+                )
+                .exclude(ai_face_similarity__isnull=True)
+                .order_by('-id')
+                .first()
+            )
+            if cred_doc:
+                face_similarity = cred_doc.ai_face_similarity
+                if face_similarity is not None:
+                    credential_match = face_similarity >= _get_similarity_threshold()
+
+            boleta_doc = (
+                DocumentacionPasajero.objects.filter(
+                    pasajero=pasajero,
+                    tipo_documento='boleta_rectoria',
+                )
+                .exclude(ai_boleta_valid__isnull=True)
+                .order_by('-id')
+                .first()
+            )
+            if boleta_doc:
+                boleta_valid = boleta_doc.ai_boleta_valid
+
+        return JsonResponse(
+            {
+                'face_present': usuario.ai_face_present,
+                'credential_match': credential_match,
+                'similarity': face_similarity,
+                'boleta_valid': boleta_valid,
+                'profile_photo_url': usuario.foto_perfil.url if usuario.foto_perfil else None,
+            },
+            status=200,
+        )
+    except Usuario.DoesNotExist:
+        return JsonResponse({'error': 'Usuario no encontrado'}, status=404)
+    except Exception:
+        logger.exception('get_ai_status error usuario_id=%s', uid)
+        return JsonResponse({'error': 'Error interno'}, status=500)

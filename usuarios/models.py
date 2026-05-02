@@ -28,6 +28,7 @@ class Usuario(AbstractBaseUser, PermissionsMixin):
     is_active = models.BooleanField(default=True)
     is_staff = models.BooleanField(default=False)
     foto_perfil = models.ImageField(upload_to='fotos_perfil/', null=True, blank=True)
+    ai_face_present = models.BooleanField(null=True, blank=True)
     
 
     objects = UsuarioManager()
@@ -55,6 +56,8 @@ class DocumentacionPasajero(models.Model):
     documento = models.FileField(upload_to='documentos/pasajeros/')
     necesita_autorizacion = models.BooleanField(default=True)
     autorizado = models.BooleanField(default=False)
+    ai_face_similarity = models.FloatField(null=True, blank=True)
+    ai_boleta_valid = models.BooleanField(null=True, blank=True)
 
 class UsuarioConductor(models.Model):
     id = models.AutoField(primary_key=True)

@@ -3,6 +3,7 @@ from django.urls import path
 from rest_framework_simplejwt.views import TokenObtainPairView
 
 from .views import actualizar_asignacion, crear_asignacion, enviar_mensaje, obtener_asignaciones_conductor, obtener_chat, obtener_estado_conductor, obtener_info_usuario, obtener_mensajes_activos, obtener_token, obtener_viajes_realizados_conductor, obtener_viajes_realizados_pasajero, registrar_usuario, registrar_conductor, login_usuario,registrar_viaje,obtener_viajes
+from .views import get_ai_status, update_profile_photo, verificar_boleta, verificar_credencial
 from usuarios import views
 
 urlpatterns = [
@@ -23,4 +24,8 @@ urlpatterns = [
     path('mensajes/', enviar_mensaje, name='enviar_mensaje'),
     path('mensajes/<int:usuario_id>/<int:otro_usuario_id>/<int:id_viaje>/', obtener_chat, name='obtener_chat'),
     path('mensajes/<int:usuario_id>/', obtener_mensajes_activos, name='obtener_mensajes_activos'),
+    path('verificar_credencial/', verificar_credencial, name='verificar_credencial'),
+    path('verificar_boleta/', verificar_boleta, name='verificar_boleta'),
+    path('usuario/<int:uid>/foto/', update_profile_photo, name='update_profile_photo'),
+    path('usuario/<int:uid>/ai_status/', get_ai_status, name='get_ai_status'),
 ]
