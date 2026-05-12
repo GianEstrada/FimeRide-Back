@@ -2,7 +2,7 @@ from xml.etree.ElementInclude import include
 from django.urls import path
 from rest_framework_simplejwt.views import TokenObtainPairView
 
-from .views import actualizar_asignacion, crear_asignacion, enviar_mensaje, login_face_match, obtener_asignaciones_conductor, obtener_chat, obtener_estado_conductor, obtener_info_usuario, obtener_mensajes_activos, obtener_token, obtener_viajes_realizados_conductor, obtener_viajes_realizados_pasajero, registrar_usuario, registrar_conductor, login_usuario, registrar_viaje, obtener_viajes, reenviar_correo_verificacion, verificar_correo_universitario, obtener_recordatorios_pasajero
+from .views import actualizar_asignacion, crear_asignacion, enviar_mensaje, login_face_match, obtener_asignaciones_conductor, obtener_chat, obtener_estado_conductor, obtener_info_usuario, obtener_mensajes_activos, obtener_token, obtener_viajes_realizados_conductor, obtener_viajes_realizados_pasajero, registrar_usuario, registrar_conductor, login_usuario, registrar_viaje, obtener_viajes, reenviar_correo_verificacion, verificar_correo_universitario, obtener_recordatorios_pasajero, obtener_viajes_pasajero_en_curso, obtener_viajes_conductor_en_curso, obtener_recordatorios_conductor
 from usuarios import views
 
 urlpatterns = [
@@ -27,4 +27,7 @@ urlpatterns = [
     path('mensajes/<int:usuario_id>/<int:otro_usuario_id>/<int:id_viaje>/', obtener_chat, name='obtener_chat'),
     path('mensajes/<int:usuario_id>/', obtener_mensajes_activos, name='obtener_mensajes_activos'),
     path('recordatorios/pasajero/<int:pasajero_id>/', obtener_recordatorios_pasajero, name='obtener_recordatorios_pasajero'),
+    path('viajes/pasajero/<int:pasajero_id>/en_curso/', obtener_viajes_pasajero_en_curso, name='obtener_viajes_pasajero_en_curso'),
+    path('viajes/conductor/<int:conductor_id>/en_curso/', obtener_viajes_conductor_en_curso, name='obtener_viajes_conductor_en_curso'),
+    path('recordatorios/conductor/<int:conductor_id>/', obtener_recordatorios_conductor, name='obtener_recordatorios_conductor'),
 ]
