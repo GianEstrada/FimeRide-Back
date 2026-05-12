@@ -403,7 +403,11 @@ def registrar_usuario(request):
             usuario.save()
 
             # Crear usuario pasajero
-            pasajero = UsuarioPasajero.objects.create(usuario=usuario)
+            pasajero = UsuarioPasajero.objects.create(
+                usuario=usuario,
+                activo=True,
+                fecha_aprobacion=now(),
+            )
 
             VerificacionIdentidad.objects.update_or_create(
                 usuario=usuario,
@@ -456,7 +460,8 @@ def registrar_usuario(request):
                 pasajero=pasajero,
                 conductor=conductor,
                 solicito_conductor=solicito_conductor,
-                aprobado_pasajero=False,
+                aprobado_pasajero=True,
+                fecha_aprobado_pasajero=now(),
                 aprobado_conductor=False,
             )
 
