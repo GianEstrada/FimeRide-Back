@@ -92,8 +92,6 @@ EMAIL_USE_TLS = os.getenv("EMAIL_USE_TLS", "true").lower() == "true"
 EMAIL_USE_SSL = os.getenv("EMAIL_USE_SSL", "false").lower() == "true"
 EMAIL_TIMEOUT = int(os.getenv("EMAIL_TIMEOUT", "10"))
 DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", EMAIL_HOST_USER or "no-reply@fimeride.app")
-RESEND_API_KEY = os.getenv("RESEND_API_KEY", "").strip()
-RESEND_API_URL = os.getenv("RESEND_API_URL", "https://api.resend.com/emails").strip()
 
 EMAIL_VERIFICATION_BASE_URL = os.getenv("EMAIL_VERIFICATION_BASE_URL", "")
 EMAIL_VERIFICATION_SALT = os.getenv("EMAIL_VERIFICATION_SALT", "fimeride-email-verify")
