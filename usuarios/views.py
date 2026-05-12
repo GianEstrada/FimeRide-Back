@@ -923,6 +923,7 @@ def obtener_viajes_pasajero_en_curso(request, pasajero_id):
                 'destino': viaje.direccion_destino or viaje.direccion,
                 'hora_salida': viaje.hora_salida,
                 'hora_llegada': viaje.hora_llegada,
+                'confirmado_por_conductor': viaje.confirmado_por_conductor,
                 'conductor': {
                     'id': viaje.conductor.usuario.id,
                     'nombre': viaje.conductor.usuario.nombre_completo,
@@ -941,6 +942,10 @@ def obtener_viajes_pasajero_en_curso(request, pasajero_id):
                 'conductor_posicion': {
                     'lat': viaje.conductor_lat_actual,
                     'lng': viaje.conductor_lng_actual,
+                } if viaje.confirmado_por_conductor else None,
+                'usuario_posicion': {
+                    'lat': asignacion_activa.parada_referencia_lat,
+                    'lng': asignacion_activa.parada_referencia_lng,
                 },
                 'tu_asignacion': {
                     'asignacion_id': asignacion_activa.id,
@@ -998,10 +1003,15 @@ def obtener_viajes_conductor_en_curso(request, conductor_id):
                     'asignacion_id': asignacion.id,
                     'usuario_id': asignacion.pasajero.usuario.id,
                     'nombre': asignacion.pasajero.usuario.nombre_completo,
+                    'foto_perfil': asignacion.pasajero.usuario.foto_perfil.url if asignacion.pasajero.usuario.foto_perfil else None,
                     'estado': 'bajo_del_vehiculo' if asignacion.descenso_confirmado else ('en_vehiculo' if asignacion.abordo_confirmado else 'pendiente_abordar'),
                     'destino': {
                         'lat': asignacion.destino_lat or viaje_activo.destino_lat,
                         'lng': asignacion.destino_lng or viaje_activo.destino_lng,
+                    },
+                    'ubicacion_actual': {
+                        'lat': asignacion.parada_referencia_lat,
+                        'lng': asignacion.parada_referencia_lng,
                     },
                     'abordo_confirmado': asignacion.abordo_confirmado,
                     'descenso_confirmado': asignacion.descenso_confirmado,
@@ -1028,6 +1038,10 @@ def obtener_viajes_conductor_en_curso(request, conductor_id):
                     'lng': viaje_activo.destino_lng,
                 },
                 'conductor_posicion': {
+                    'lat': viaje_activo.conductor_lat_actual,
+                    'lng': viaje_activo.conductor_lng_actual,
+                },
+                'usuario_posicion': {
                     'lat': viaje_activo.conductor_lat_actual,
                     'lng': viaje_activo.conductor_lng_actual,
                 },
@@ -1130,3 +1144,55 @@ def obtener_recordatorios_conductor(request, conductor_id):
         except Exception as e:
             return JsonResponse({'error': str(e)}, status=500)
     return JsonResponse({'error': 'Método no permitido'}, status=405)
+
+
+@csrf_exempt
+def actualizar_ubicacion_conductor(request, viaje_id):
+    if request.method != 'POST':
+        return JsonResponse({'error': 'Método no permitido'}, status=405)
+
+    try:
+        data = json.loads(request.body)
+        lat = float(data.get('lat'))
+        lng = float(data.get('lng'))
+    except Exception:
+        return JsonResponse({'error': 'Payload inválido. Se requiere lat y lng.'}, status=400)
+
+    try:
+        viaje = Viaje.objects.get(id=viaje_id, activo=True)
+    except Viaje.DoesNotExist:
+        return JsonResponse({'error': 'Viaje no encontrado'}, status=404)
+
+    viaje.conductor_lat_actual = lat
+    viaje.conductor_lng_actual = lng
+    viaje.conductor_ubicacion_actualizada_en = now()
+    viaje.save(update_fields=['conductor_lat_actual', 'conductor_lng_actual', 'conductor_ubicacion_actualizada_en'])
+
+    return JsonResponse({'ok': True, 'viaje_finalizado': bool(viaje.finalizado)}, status=200)
+
+
+@csrf_exempt
+def actualizar_ubicacion_pasajero(request, asignacion_id):
+    if request.method != 'POST':
+        return JsonResponse({'error': 'Método no permitido'}, status=405)
+
+    try:
+        data = json.loads(request.body)
+        lat = float(data.get('lat'))
+        lng = float(data.get('lng'))
+    except Exception:
+        return JsonResponse({'error': 'Payload inválido. Se requiere lat y lng.'}, status=400)
+
+    try:
+        asignacion = Asignacion.objects.select_related('viaje').get(id=asignacion_id, activo=True)
+    except Asignacion.DoesNotExist:
+        return JsonResponse({'error': 'Asignación no encontrada'}, status=404)
+
+    if not asignacion.viaje.activo or asignacion.viaje.finalizado:
+        return JsonResponse({'error': 'El viaje no está activo'}, status=400)
+
+    asignacion.parada_referencia_lat = lat
+    asignacion.parada_referencia_lng = lng
+    asignacion.save(update_fields=['parada_referencia_lat', 'parada_referencia_lng'])
+
+    return JsonResponse({'ok': True}, status=200)
