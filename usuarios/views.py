@@ -1,9 +1,11 @@
 import json
 import os
+from decimal import Decimal
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from .models import Asignacion, DocumentacionConductor, DocumentacionPasajero, Mensaje, Solicitud, Usuario, UsuarioConductor, UsuarioPasajero, VerificacionIdentidad
 from django.db import transaction
+from django.conf import settings
 from django.utils.timezone import now
 from django.contrib.auth import authenticate
 from rest_framework.decorators import api_view, permission_classes
@@ -155,6 +157,16 @@ def login_face_match(request):
     if request.method != 'POST':
         return JsonResponse({'error': 'Método no permitido'}, status=405)
 
+    if not settings.AWS_VERIFICATION_ENABLED:
+        return JsonResponse(
+            {
+                'ok': True,
+                'message': 'Validación facial temporalmente omitida (modo contingencia).',
+                'similarity': 100.0,
+            },
+            status=200,
+        )
+
     try:
         usuario_id = request.POST.get('usuario_id')
         imagen_viva = request.FILES.get('imagen_viva')
@@ -226,13 +238,26 @@ def registrar_usuario(request):
             foto_perfil = request.FILES['foto_perfil']
             boleta_rectoria = request.FILES['boleta_rectoria']
 
-            verificacion_resultado = safe_validate_registration(
-                matricula=data['matricula'],
-                boleta_pdf=boleta_rectoria,
-                foto_perfil=foto_perfil,
-                credencial_frontal=credencial_frontal,
-                credencial_digital_pdf=credencial_digital_pdf,
-            )
+            if settings.AWS_VERIFICATION_ENABLED:
+                verificacion_resultado = safe_validate_registration(
+                    matricula=data['matricula'],
+                    boleta_pdf=boleta_rectoria,
+                    foto_perfil=foto_perfil,
+                    credencial_frontal=credencial_frontal,
+                    credencial_digital_pdf=credencial_digital_pdf,
+                )
+            else:
+                verificacion_resultado = {
+                    'aprobado': True,
+                    'boleta_pagada': True,
+                    'matricula_en_boleta': True,
+                    'matricula_en_credencial': True,
+                    'matricula_coincide': True,
+                    'face_match': True,
+                    'face_similarity': Decimal('100'),
+                    'motivo': 'Verificación AWS omitida temporalmente (modo contingencia).',
+                    'raw': {'contingencia': True},
+                }
 
             if not verificacion_resultado['aprobado']:
                 return JsonResponse(

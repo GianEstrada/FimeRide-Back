@@ -172,6 +172,16 @@ def safe_validate_registration(
             credencial_digital_pdf=credencial_digital_pdf,
         )
     except (ClientError, BotoCoreError, ValueError) as exc:
+        friendly_message = f"Error al verificar documentos en AWS: {exc}"
+        if isinstance(exc, ClientError):
+            error_code = exc.response.get("Error", {}).get("Code", "")
+            if error_code == "SubscriptionRequiredException":
+                friendly_message = (
+                    "AWS devolvio SubscriptionRequiredException al usar Textract. "
+                    "Debes habilitar Amazon Textract en la cuenta/región activa y verificar permisos IAM "
+                    "(textract:DetectDocumentText)."
+                )
+
         return {
             "aprobado": False,
             "boleta_pagada": False,
@@ -180,7 +190,7 @@ def safe_validate_registration(
             "matricula_coincide": False,
             "face_match": False,
             "face_similarity": Decimal("0"),
-            "motivo": f"Error al verificar documentos en AWS: {exc}",
+            "motivo": friendly_message,
             "raw": {},
         }
 

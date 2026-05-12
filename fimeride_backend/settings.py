@@ -60,6 +60,7 @@ AWS_QUERYSTRING_AUTH = (
 # Umbrales de comparación facial con Rekognition
 REKOGNITION_SIMILARITY_THRESHOLD = float(os.getenv("REKOGNITION_SIMILARITY_THRESHOLD", "90"))
 REKOGNITION_LOGIN_SIMILARITY_THRESHOLD = float(os.getenv("REKOGNITION_LOGIN_SIMILARITY_THRESHOLD", "90"))
+AWS_VERIFICATION_ENABLED = os.getenv("AWS_VERIFICATION_ENABLED", "true").lower() == "true"
 
 # Opcional: Configuración de caché para archivos estáticos
 AWS_S3_OBJECT_PARAMETERS = {
