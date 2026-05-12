@@ -243,6 +243,115 @@ def verificar_correo_universitario(request, token):
 
     return HttpResponse("Correo verificado correctamente. Ya puedes iniciar sesión en FimeHub.", status=200)
 
+
+@csrf_exempt
+def reenviar_correo_verificacion(request):
+    if request.method == 'GET':
+        solicitudes_pendientes = (
+            Solicitud.objects.filter(aprobado_pasajero=False)
+            .select_related('usuario', 'pasajero')
+        )
+
+        enviados = 0
+        ya_verificados = 0
+        fallidos = 0
+        detalles_fallidos = []
+
+        usuarios_procesados = set()
+        for solicitud in solicitudes_pendientes:
+            usuario = solicitud.usuario
+
+            if usuario.id in usuarios_procesados:
+                continue
+            usuarios_procesados.add(usuario.id)
+
+            if solicitud.pasajero and solicitud.pasajero.activo:
+                ya_verificados += 1
+                continue
+
+            try:
+                _enviar_correo_verificacion(request, usuario)
+                enviados += 1
+            except Exception as email_error:
+                fallidos += 1
+                detalle_error = str(email_error)
+                detalles_fallidos.append(
+                    {
+                        'usuario_id': usuario.id,
+                        'correo_universitario': usuario.correo_universitario,
+                        'error': detalle_error,
+                    }
+                )
+                print(
+                    f"No se pudo reenviar correo de verificacion para usuario {usuario.id}: {detalle_error}"
+                )
+
+        return JsonResponse(
+            {
+                'message': 'Reenvío masivo de verificación ejecutado',
+                'total_pendientes': len(usuarios_procesados),
+                'enviados': enviados,
+                'ya_verificados': ya_verificados,
+                'fallidos': fallidos,
+                'detalles_fallidos': detalles_fallidos,
+            },
+            status=200,
+        )
+
+    if request.method != 'POST':
+        return JsonResponse({'error': 'Método no permitido'}, status=405)
+
+    try:
+        data = json.loads(request.body or '{}')
+    except json.JSONDecodeError:
+        return JsonResponse({'error': 'Formato JSON inválido'}, status=400)
+
+    correo_universitario = (data.get('correo_universitario') or '').strip()
+    matricula = (data.get('matricula') or '').strip()
+
+    if not correo_universitario and not matricula:
+        return JsonResponse(
+            {'error': 'Debes enviar correo_universitario o matricula'},
+            status=400,
+        )
+
+    filtros = {}
+    if correo_universitario:
+        filtros['correo_universitario'] = correo_universitario
+    if matricula:
+        filtros['matricula'] = matricula
+
+    try:
+        usuario = Usuario.objects.get(**filtros)
+    except Usuario.DoesNotExist:
+        return JsonResponse({'error': 'Usuario no encontrado'}, status=404)
+    except Usuario.MultipleObjectsReturned:
+        return JsonResponse({'error': 'Coincidencia ambigua de usuario'}, status=400)
+
+    pasajero = UsuarioPasajero.objects.filter(usuario=usuario).first()
+    if pasajero is None:
+        return JsonResponse({'error': 'No existe perfil de pasajero para este usuario'}, status=404)
+
+    if pasajero.activo:
+        return JsonResponse({'message': 'El usuario ya tiene correo verificado'}, status=200)
+
+    try:
+        _enviar_correo_verificacion(request, usuario)
+    except Exception as email_error:
+        print(f"No se pudo reenviar correo de verificacion para usuario {usuario.id}: {email_error}")
+        return JsonResponse(
+            {
+                'error': 'No se pudo enviar el correo de verificación en este momento',
+                'detalle': str(email_error),
+            },
+            status=503,
+        )
+
+    return JsonResponse(
+        {'message': 'Correo de verificación reenviado correctamente'},
+        status=200,
+    )
+
 @csrf_exempt
 @transaction.atomic
 def registrar_usuario(request):
