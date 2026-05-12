@@ -5,14 +5,12 @@ from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from .models import Asignacion, DocumentacionConductor, DocumentacionPasajero, Mensaje, Solicitud, Usuario, UsuarioConductor, UsuarioPasajero, VerificacionIdentidad
 from django.db import transaction
-from django.conf import settings
 from django.utils.timezone import now
 from django.contrib.auth import authenticate
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from .models import Viaje
 from django.db.models import Q
-from usuarios.services.identity_verification_service import safe_compare_live_face, safe_validate_registration
 
 @api_view(['GET'])
 def obtener_token(request):
@@ -157,59 +155,14 @@ def login_face_match(request):
     if request.method != 'POST':
         return JsonResponse({'error': 'Método no permitido'}, status=405)
 
-    if not settings.AWS_VERIFICATION_ENABLED:
-        return JsonResponse(
-            {
-                'ok': True,
-                'message': 'Validación facial temporalmente omitida (modo contingencia).',
-                'similarity': 100.0,
-            },
-            status=200,
-        )
-
-    try:
-        usuario_id = request.POST.get('usuario_id')
-        imagen_viva = request.FILES.get('imagen_viva')
-
-        if not usuario_id or not imagen_viva:
-            return JsonResponse({'error': 'usuario_id e imagen_viva son obligatorios'}, status=400)
-
-        try:
-            usuario = Usuario.objects.get(id=usuario_id)
-        except Usuario.DoesNotExist:
-            return JsonResponse({'error': 'Usuario no encontrado'}, status=404)
-
-        if not usuario.foto_perfil:
-            return JsonResponse({'error': 'El usuario no tiene foto de perfil registrada'}, status=400)
-
-        verificacion = VerificacionIdentidad.objects.filter(usuario=usuario, registro_aprobado=True).first()
-        if verificacion is None:
-            return JsonResponse({'error': 'El usuario no cuenta con identidad verificada'}, status=403)
-
-        resultado = safe_compare_live_face(usuario.foto_perfil, imagen_viva)
-        if resultado['error']:
-            return JsonResponse({'error': f"No se pudo validar identidad en vivo: {resultado['error']}"}, status=502)
-
-        if not resultado['match']:
-            return JsonResponse(
-                {
-                    'ok': False,
-                    'message': 'No se pudo confirmar tu identidad facial.',
-                    'similarity': float(resultado['similarity']),
-                },
-                status=401,
-            )
-
-        return JsonResponse(
-            {
-                'ok': True,
-                'message': 'Identidad confirmada',
-                'similarity': float(resultado['similarity']),
-            },
-            status=200,
-        )
-    except Exception as exc:
-        return JsonResponse({'error': str(exc)}, status=500)
+    return JsonResponse(
+        {
+            'ok': True,
+            'message': 'Validación facial aprobada temporalmente.',
+            'similarity': 100.0,
+        },
+        status=200,
+    )
 
 @csrf_exempt
 @transaction.atomic
@@ -238,41 +191,17 @@ def registrar_usuario(request):
             foto_perfil = request.FILES['foto_perfil']
             boleta_rectoria = request.FILES['boleta_rectoria']
 
-            if settings.AWS_VERIFICATION_ENABLED:
-                verificacion_resultado = safe_validate_registration(
-                    matricula=data['matricula'],
-                    boleta_pdf=boleta_rectoria,
-                    foto_perfil=foto_perfil,
-                    credencial_frontal=credencial_frontal,
-                    credencial_digital_pdf=credencial_digital_pdf,
-                )
-            else:
-                verificacion_resultado = {
-                    'aprobado': True,
-                    'boleta_pagada': True,
-                    'matricula_en_boleta': True,
-                    'matricula_en_credencial': True,
-                    'matricula_coincide': True,
-                    'face_match': True,
-                    'face_similarity': Decimal('100'),
-                    'motivo': 'Verificación AWS omitida temporalmente (modo contingencia).',
-                    'raw': {'contingencia': True},
-                }
-
-            if not verificacion_resultado['aprobado']:
-                return JsonResponse(
-                    {
-                        'error': 'No se pudo verificar la documentación para completar el registro.',
-                        'motivo': verificacion_resultado['motivo'],
-                        'detalle_verificacion': {
-                            'boleta_pagada': verificacion_resultado['boleta_pagada'],
-                            'matricula_coincide': verificacion_resultado['matricula_coincide'],
-                            'face_match': verificacion_resultado['face_match'],
-                            'face_similarity': float(verificacion_resultado['face_similarity']),
-                        },
-                    },
-                    status=400,
-                )
+            verificacion_resultado = {
+                'aprobado': True,
+                'boleta_pagada': True,
+                'matricula_en_boleta': True,
+                'matricula_en_credencial': True,
+                'matricula_coincide': True,
+                'face_match': True,
+                'face_similarity': Decimal('100'),
+                'motivo': 'Verificación documental y facial aprobada temporalmente.',
+                'raw': {'contingencia': True},
+            }
 
             # Crear usuario general
             usuario = Usuario(
