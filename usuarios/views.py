@@ -1129,8 +1129,8 @@ def obtener_recordatorios_conductor(request, conductor_id):
                 }
 
                 return JsonResponse({
-                    'show_popup': mostrar_aviso_5_min,
-                    'show_notification': mostrar_aviso_5_min,
+                    'show_popup': (mostrar_aviso_5_min and not viaje.confirmado_por_conductor),
+                    'show_notification': (mostrar_aviso_5_min and not viaje.confirmado_por_conductor),
                     'viaje': viaje_popup,
                     'preinicio': preinicio if mostrar_preinicio else None,
                 }, status=200)
