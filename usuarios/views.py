@@ -350,12 +350,24 @@ def registrar_usuario(request):
                 aprobado_conductor=False,
             )
 
-            _enviar_correo_verificacion(request, usuario)
+            correo_verificacion_enviado = True
+            try:
+                _enviar_correo_verificacion(request, usuario)
+            except Exception as email_error:
+                correo_verificacion_enviado = False
+                print(f"No se pudo enviar correo de verificacion para usuario {usuario.id}: {email_error}")
+
+            mensaje = (
+                'Usuario registrado. Revisa tu correo universitario para verificar la cuenta.'
+                if correo_verificacion_enviado
+                else 'Usuario registrado, pero no se pudo enviar el correo de verificacion en este momento.'
+            )
 
             return JsonResponse(
                 {
-                    'message': 'Usuario registrado. Revisa tu correo universitario para verificar la cuenta.',
+                    'message': mensaje,
                     'usuario_id': usuario.id,
+                    'correo_verificacion_enviado': correo_verificacion_enviado,
                 },
                 status=201,
             )
