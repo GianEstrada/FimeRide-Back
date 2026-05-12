@@ -45,8 +45,15 @@ AUTH_USER_MODEL = "usuarios.Usuario"
 
 # Configuración para archivos multimedia
 
-# Configuración de almacenamiento en Amazon S3
-DEFAULT_FILE_STORAGE = "storages.backends.s3boto3.S3Boto3Storage"
+# Configuración de almacenamiento en Amazon S3 (Django 5+)
+STORAGES = {
+    "default": {
+        "BACKEND": "storages.backends.s3boto3.S3Boto3Storage",
+    },
+    "staticfiles": {
+        "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
+    },
+}
 
 # Configuración de credenciales de AWS
 AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID")  # Tu Access Key ID
@@ -56,6 +63,7 @@ AWS_S3_REGION_NAME = os.getenv("AWS_S3_REGION_NAME", "us-east-2")
 AWS_QUERYSTRING_AUTH = (
     False  # Deshabilita los parámetros de consulta en las URLs públicas
 )
+AWS_DEFAULT_ACL = None
 
 # Umbrales de comparación facial con Rekognition
 REKOGNITION_SIMILARITY_THRESHOLD = float(os.getenv("REKOGNITION_SIMILARITY_THRESHOLD", "90"))
@@ -68,6 +76,19 @@ AWS_S3_OBJECT_PARAMETERS = {
 }
 
 TOKEN_SEGURO = os.getenv("TOKEN_SEGURO", "valor_por_defecto")
+
+# Configuración de verificación por correo
+EMAIL_BACKEND = os.getenv("EMAIL_BACKEND", "django.core.mail.backends.console.EmailBackend")
+EMAIL_HOST = os.getenv("EMAIL_HOST", "")
+EMAIL_PORT = int(os.getenv("EMAIL_PORT", "587"))
+EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER", "")
+EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD", "")
+EMAIL_USE_TLS = os.getenv("EMAIL_USE_TLS", "true").lower() == "true"
+DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "no-reply@fimeride.app")
+
+EMAIL_VERIFICATION_BASE_URL = os.getenv("EMAIL_VERIFICATION_BASE_URL", "")
+EMAIL_VERIFICATION_SALT = os.getenv("EMAIL_VERIFICATION_SALT", "fimeride-email-verify")
+EMAIL_VERIFICATION_MAX_AGE_SECONDS = int(os.getenv("EMAIL_VERIFICATION_MAX_AGE_SECONDS", "86400"))
 
 # Application definition
 

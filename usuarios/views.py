@@ -1,16 +1,54 @@
 import json
 import os
 from decimal import Decimal
-from django.http import JsonResponse
+from django.http import HttpResponse, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from .models import Asignacion, DocumentacionConductor, DocumentacionPasajero, Mensaje, Solicitud, Usuario, UsuarioConductor, UsuarioPasajero, VerificacionIdentidad
 from django.db import transaction
+from django.conf import settings
 from django.utils.timezone import now
 from django.contrib.auth import authenticate
+from django.core.mail import send_mail
+from django.core import signing
+from django.urls import reverse
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from .models import Viaje
 from django.db.models import Q
+
+
+def _crear_token_verificacion(usuario):
+    signer = signing.TimestampSigner(salt=settings.EMAIL_VERIFICATION_SALT)
+    payload = f"{usuario.id}:{usuario.correo_universitario}"
+    return signer.sign(payload)
+
+
+def _construir_url_verificacion(request, token):
+    path = reverse('verificar_correo_universitario', args=[token])
+    if settings.EMAIL_VERIFICATION_BASE_URL:
+        return f"{settings.EMAIL_VERIFICATION_BASE_URL.rstrip('/')}{path}"
+    return request.build_absolute_uri(path)
+
+
+def _enviar_correo_verificacion(request, usuario):
+    token = _crear_token_verificacion(usuario)
+    url_verificacion = _construir_url_verificacion(request, token)
+    asunto = "Verifica tu correo universitario - FimeHub"
+    mensaje = (
+        f"Hola {usuario.nombre_completo},\n\n"
+        "Para activar tu acceso básico a FimeHub y tu cuenta como pasajero de FimeRide, "
+        "verifica tu correo universitario entrando al siguiente enlace:\n\n"
+        f"{url_verificacion}\n\n"
+        "Este enlace expira en 24 horas.\n\n"
+        "Si no solicitaste esta cuenta, ignora este correo."
+    )
+    send_mail(
+        subject=asunto,
+        message=mensaje,
+        from_email=settings.DEFAULT_FROM_EMAIL,
+        recipient_list=[usuario.correo_universitario],
+        fail_silently=False,
+    )
 
 @api_view(['GET'])
 def obtener_token(request):
@@ -164,6 +202,45 @@ def login_face_match(request):
         status=200,
     )
 
+
+@csrf_exempt
+def verificar_correo_universitario(request, token):
+    signer = signing.TimestampSigner(salt=settings.EMAIL_VERIFICATION_SALT)
+
+    try:
+        payload = signer.unsign(token, max_age=settings.EMAIL_VERIFICATION_MAX_AGE_SECONDS)
+        usuario_id, correo = payload.split(':', 1)
+    except signing.SignatureExpired:
+        return HttpResponse(
+            "Enlace expirado. Regístrate de nuevo para generar una nueva verificación.",
+            status=400,
+        )
+    except (signing.BadSignature, ValueError):
+        return HttpResponse("Enlace de verificación inválido.", status=400)
+
+    try:
+        usuario = Usuario.objects.get(id=int(usuario_id), correo_universitario=correo)
+    except Usuario.DoesNotExist:
+        return HttpResponse("Usuario no encontrado para este enlace.", status=404)
+
+    pasajero = UsuarioPasajero.objects.filter(usuario=usuario).first()
+    if pasajero is None:
+        return HttpResponse("No existe perfil de pasajero para este usuario.", status=404)
+
+    if pasajero.activo:
+        return HttpResponse("Tu correo ya estaba verificado. Ya puedes iniciar sesión.", status=200)
+
+    pasajero.activo = True
+    pasajero.fecha_aprobacion = now()
+    pasajero.save(update_fields=['activo', 'fecha_aprobacion'])
+
+    Solicitud.objects.filter(usuario=usuario, pasajero=pasajero).update(
+        aprobado_pasajero=True,
+        fecha_aprobado_pasajero=now(),
+    )
+
+    return HttpResponse("Correo verificado correctamente. Ya puedes iniciar sesión en FimeHub.", status=200)
+
 @csrf_exempt
 @transaction.atomic
 def registrar_usuario(request):
@@ -271,7 +348,15 @@ def registrar_usuario(request):
                 aprobado_conductor=False,
             )
 
-            return JsonResponse({'message': 'Usuario registrado exitosamente', 'usuario_id': usuario.id}, status=201)
+            _enviar_correo_verificacion(request, usuario)
+
+            return JsonResponse(
+                {
+                    'message': 'Usuario registrado. Revisa tu correo universitario para verificar la cuenta.',
+                    'usuario_id': usuario.id,
+                },
+                status=201,
+            )
         except Exception as e:
             return JsonResponse({'error': str(e)}, status=400)
         

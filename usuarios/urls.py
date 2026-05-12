@@ -2,13 +2,14 @@ from xml.etree.ElementInclude import include
 from django.urls import path
 from rest_framework_simplejwt.views import TokenObtainPairView
 
-from .views import actualizar_asignacion, crear_asignacion, enviar_mensaje, login_face_match, obtener_asignaciones_conductor, obtener_chat, obtener_estado_conductor, obtener_info_usuario, obtener_mensajes_activos, obtener_token, obtener_viajes_realizados_conductor, obtener_viajes_realizados_pasajero, registrar_usuario, registrar_conductor, login_usuario,registrar_viaje,obtener_viajes
+from .views import actualizar_asignacion, crear_asignacion, enviar_mensaje, login_face_match, obtener_asignaciones_conductor, obtener_chat, obtener_estado_conductor, obtener_info_usuario, obtener_mensajes_activos, obtener_token, obtener_viajes_realizados_conductor, obtener_viajes_realizados_pasajero, registrar_usuario, registrar_conductor, login_usuario,registrar_viaje,obtener_viajes, verificar_correo_universitario
 from usuarios import views
 
 urlpatterns = [
     path('login/', login_usuario, name='login_usuario'),
     path('login_face_match/', login_face_match, name='login_face_match'),
     path('registrar/', registrar_usuario, name='registrar_usuario'),
+    path('verificar-correo/<str:token>/', verificar_correo_universitario, name='verificar_correo_universitario'),
     path('registrar_conductor/', registrar_conductor, name='registrar_conductor'),
     path('token/', TokenObtainPairView.as_view(), name='token_obtain_pair'),  # Cambiado
     path('mapbox-token/', obtener_token, name='obtener_token'),
