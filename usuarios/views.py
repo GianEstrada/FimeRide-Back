@@ -360,6 +360,7 @@ def registrar_usuario(request):
                 status=201,
             )
         except Exception as e:
+            transaction.set_rollback(True)
             return JsonResponse({'error': str(e)}, status=400)
         
         
