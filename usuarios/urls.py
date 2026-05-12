@@ -2,7 +2,7 @@ from xml.etree.ElementInclude import include
 from django.urls import path
 from rest_framework_simplejwt.views import TokenObtainPairView
 
-from .views import actualizar_asignacion, crear_asignacion, enviar_mensaje, login_face_match, obtener_asignaciones_conductor, obtener_chat, obtener_estado_conductor, obtener_info_usuario, obtener_mensajes_activos, obtener_token, obtener_viajes_realizados_conductor, obtener_viajes_realizados_pasajero, registrar_usuario, registrar_conductor, login_usuario, registrar_viaje, obtener_viajes, reenviar_correo_verificacion, verificar_correo_universitario, obtener_recordatorios_pasajero, obtener_viajes_pasajero_en_curso, obtener_viajes_conductor_en_curso, obtener_recordatorios_conductor, actualizar_ubicacion_conductor, actualizar_ubicacion_pasajero
+from .views import actualizar_asignacion, crear_asignacion, enviar_mensaje, login_face_match, obtener_asignaciones_conductor, obtener_chat, obtener_estado_conductor, obtener_info_usuario, obtener_mensajes_activos, obtener_token, obtener_viajes_realizados_conductor, obtener_viajes_realizados_pasajero, registrar_usuario, registrar_conductor, login_usuario, registrar_viaje, obtener_viajes, reenviar_correo_verificacion, verificar_correo_universitario, obtener_recordatorios_pasajero, obtener_viajes_pasajero_en_curso, obtener_viajes_conductor_en_curso, obtener_recordatorios_conductor, actualizar_ubicacion_conductor, actualizar_ubicacion_pasajero, accion_conductor_viaje, confirmar_abordo_pasajero
 from usuarios import views
 
 urlpatterns = [
@@ -30,6 +30,8 @@ urlpatterns = [
     path('viajes/pasajero/<int:pasajero_id>/en_curso/', obtener_viajes_pasajero_en_curso, name='obtener_viajes_pasajero_en_curso'),
     path('viajes/conductor/<int:conductor_id>/en_curso/', obtener_viajes_conductor_en_curso, name='obtener_viajes_conductor_en_curso'),
     path('recordatorios/conductor/<int:conductor_id>/', obtener_recordatorios_conductor, name='obtener_recordatorios_conductor'),
+    path('viajes/<int:viaje_id>/accion_conductor/', accion_conductor_viaje, name='accion_conductor_viaje'),
+    path('asignaciones/<int:asignacion_id>/abordo/', confirmar_abordo_pasajero, name='confirmar_abordo_pasajero'),
     path('viajes/<int:viaje_id>/ubicacion_conductor/', actualizar_ubicacion_conductor, name='actualizar_ubicacion_conductor'),
     path('asignaciones/<int:asignacion_id>/ubicacion_pasajero/', actualizar_ubicacion_pasajero, name='actualizar_ubicacion_pasajero'),
 ]

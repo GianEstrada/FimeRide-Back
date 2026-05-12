@@ -1005,6 +1005,7 @@ def obtener_viajes_conductor_en_curso(request, conductor_id):
                     'nombre': asignacion.pasajero.usuario.nombre_completo,
                     'foto_perfil': asignacion.pasajero.usuario.foto_perfil.url if asignacion.pasajero.usuario.foto_perfil else None,
                     'estado': 'bajo_del_vehiculo' if asignacion.descenso_confirmado else ('en_vehiculo' if asignacion.abordo_confirmado else 'pendiente_abordar'),
+                    'a_bordo': asignacion.abordo_confirmado,
                     'destino': {
                         'lat': asignacion.destino_lat or viaje_activo.destino_lat,
                         'lng': asignacion.destino_lng or viaje_activo.destino_lng,
@@ -1196,3 +1197,66 @@ def actualizar_ubicacion_pasajero(request, asignacion_id):
     asignacion.save(update_fields=['parada_referencia_lat', 'parada_referencia_lng'])
 
     return JsonResponse({'ok': True}, status=200)
+
+
+@csrf_exempt
+def accion_conductor_viaje(request, viaje_id):
+    if request.method != 'POST':
+        return JsonResponse({'error': 'Método no permitido'}, status=405)
+
+    try:
+        data = json.loads(request.body)
+        accion = (data.get('accion') or '').strip().lower()
+    except Exception:
+        return JsonResponse({'error': 'Payload inválido'}, status=400)
+
+    if accion not in {'confirmar', 'cancelar', 'iniciar', 'esperar_5_mas'}:
+        return JsonResponse({'error': 'Acción no válida'}, status=400)
+
+    try:
+        viaje = Viaje.objects.get(id=viaje_id)
+    except Viaje.DoesNotExist:
+        return JsonResponse({'error': 'Viaje no encontrado'}, status=404)
+
+    ahora = now()
+
+    if accion == 'confirmar':
+        viaje.confirmado_por_conductor = True
+        viaje.confirmado_en = ahora
+        viaje.save(update_fields=['confirmado_por_conductor', 'confirmado_en'])
+    elif accion == 'cancelar':
+        viaje.activo = False
+        viaje.finalizado = True
+        viaje.finalizado_en = ahora
+        viaje.save(update_fields=['activo', 'finalizado', 'finalizado_en'])
+    elif accion == 'iniciar':
+        viaje.confirmado_por_conductor = True
+        if viaje.confirmado_en is None:
+            viaje.confirmado_en = ahora
+        viaje.iniciado = True
+        if viaje.inicio_real is None:
+            viaje.inicio_real = ahora
+        viaje.save(update_fields=['confirmado_por_conductor', 'confirmado_en', 'iniciado', 'inicio_real'])
+    elif accion == 'esperar_5_mas':
+        from datetime import timedelta
+        viaje.gracia_adicional_hasta = ahora + timedelta(minutes=5)
+        viaje.save(update_fields=['gracia_adicional_hasta'])
+
+    return JsonResponse({'ok': True, 'accion': accion}, status=200)
+
+
+@csrf_exempt
+def confirmar_abordo_pasajero(request, asignacion_id):
+    if request.method not in {'PATCH', 'POST'}:
+        return JsonResponse({'error': 'Método no permitido'}, status=405)
+
+    try:
+        asignacion = Asignacion.objects.select_related('viaje').get(id=asignacion_id)
+    except Asignacion.DoesNotExist:
+        return JsonResponse({'error': 'Asignación no encontrada'}, status=404)
+
+    asignacion.abordo_confirmado = True
+    asignacion.abordo_confirmado_en = now()
+    asignacion.save(update_fields=['abordo_confirmado', 'abordo_confirmado_en'])
+
+    return JsonResponse({'ok': True, 'asignacion_id': asignacion.id, 'a_bordo': True}, status=200)
