@@ -2,7 +2,7 @@ from xml.etree.ElementInclude import include
 from django.urls import path
 from rest_framework_simplejwt.views import TokenObtainPairView
 
-from .views import actualizar_asignacion, crear_asignacion, enviar_mensaje, login_face_match, obtener_asignaciones_conductor, obtener_chat, obtener_estado_conductor, obtener_info_usuario, obtener_mensajes_activos, obtener_token, obtener_viajes_realizados_conductor, obtener_viajes_realizados_pasajero, registrar_usuario, registrar_conductor, login_usuario,registrar_viaje,obtener_viajes, reenviar_correo_verificacion, verificar_correo_universitario
+from .views import actualizar_asignacion, crear_asignacion, enviar_mensaje, login_face_match, obtener_asignaciones_conductor, obtener_chat, obtener_estado_conductor, obtener_info_usuario, obtener_mensajes_activos, obtener_token, obtener_viajes_realizados_conductor, obtener_viajes_realizados_pasajero, registrar_usuario, registrar_conductor, login_usuario, registrar_viaje, obtener_viajes, reenviar_correo_verificacion, verificar_correo_universitario, obtener_recordatorios_pasajero
 from usuarios import views
 
 urlpatterns = [
@@ -26,4 +26,5 @@ urlpatterns = [
     path('mensajes/', enviar_mensaje, name='enviar_mensaje'),
     path('mensajes/<int:usuario_id>/<int:otro_usuario_id>/<int:id_viaje>/', obtener_chat, name='obtener_chat'),
     path('mensajes/<int:usuario_id>/', obtener_mensajes_activos, name='obtener_mensajes_activos'),
+    path('recordatorios/pasajero/<int:pasajero_id>/', obtener_recordatorios_pasajero, name='obtener_recordatorios_pasajero'),
 ]

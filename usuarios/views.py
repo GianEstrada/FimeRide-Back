@@ -796,3 +796,79 @@ def obtener_chat(request, usuario_id, otro_usuario_id, id_viaje):
             print(f"Error en obtener_chat: {e}")
             return JsonResponse({'error': str(e)}, status=500)
     return JsonResponse({'error': 'Método no permitido'}, status=405)
+
+@csrf_exempt
+def obtener_recordatorios_pasajero(request, pasajero_id):
+    """Obtiene los recordatorios de viajes próximos para un pasajero"""
+    if request.method == 'GET':
+        try:
+            from datetime import timedelta
+            
+            # Obtener asignaciones activas del pasajero
+            asignaciones = Asignacion.objects.filter(
+                pasajero_id=pasajero_id,
+                activo=True,
+                viaje__activo=True
+            ).select_related('viaje', 'viaje__conductor__usuario').prefetch_related('viaje')
+            
+            recordatorios = []
+            ahora = now()
+            hoy = ahora.date()
+            
+            for asignacion in asignaciones:
+                viaje = asignacion.viaje
+                
+                # Solo incluir viajes de hoy o después
+                if viaje.fecha_viaje < hoy:
+                    continue
+                
+                # Parsear hora de salida (formato HH:MM)
+                try:
+                    hora_salida_parts = viaje.hora_salida.split(':')
+                    hora_salida = ahora.replace(
+                        hour=int(hora_salida_parts[0]),
+                        minute=int(hora_salida_parts[1]),
+                        second=0,
+                        microsecond=0
+                    )
+                    
+                    # Si es para un día distinto, ajustar la fecha
+                    if viaje.fecha_viaje > hoy:
+                        hora_salida = hora_salida.replace(year=viaje.fecha_viaje.year, month=viaje.fecha_viaje.month, day=viaje.fecha_viaje.day)
+                except:
+                    continue
+                
+                # Calcular si mostrar aviso de 5 minutos antes
+                tiempo_5_min_antes = hora_salida - timedelta(minutes=5)
+                mostrar_aviso_5_min = tiempo_5_min_antes <= ahora < hora_salida
+                
+                # Calcular si mostrar aviso de preinicio (a la hora de salida)
+                tiempo_despues_salida = hora_salida + timedelta(minutes=5)
+                mostrar_preinicio = hora_salida <= ahora <= tiempo_despues_salida
+                
+                # Asegurarse de no duplicar notificaciones innecesariamente
+                if not mostrar_aviso_5_min and not mostrar_preinicio:
+                    continue
+                
+                recordatorio = {
+                    'viaje_id': viaje.id,
+                    'inicio': viaje.direccion_inicio or viaje.direccion,
+                    'destino': viaje.direccion_destino or viaje.direccion,
+                    'hora_salida': viaje.hora_salida,
+                    'hora_llegada': viaje.hora_llegada,
+                    'fecha_viaje': viaje.fecha_viaje.strftime('%Y-%m-%d'),
+                    'confirmado_por_conductor': viaje.confirmado_por_conductor,
+                    'mostrar_aviso_5_min': mostrar_aviso_5_min,
+                    'mostrar_preinicio': mostrar_preinicio,
+                    'conductor': {
+                        'id': viaje.conductor.usuario.id,
+                        'nombre': viaje.conductor.usuario.nombre_completo,
+                        'foto_perfil': viaje.conductor.usuario.foto_perfil.url if viaje.conductor.usuario.foto_perfil else None,
+                    }
+                }
+                recordatorios.append(recordatorio)
+            
+            return JsonResponse(recordatorios, safe=False, status=200)
+        except Exception as e:
+            return JsonResponse({'error': str(e)}, status=500)
+    return JsonResponse({'error': 'Método no permitido'}, status=405)
