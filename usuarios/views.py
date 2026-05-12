@@ -1,5 +1,7 @@
 import json
 import os
+from urllib import error as urllib_error
+from urllib import request as urllib_request
 from decimal import Decimal
 from django.http import HttpResponse, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
@@ -42,6 +44,38 @@ def _enviar_correo_verificacion(request, usuario):
         "Este enlace expira en 24 horas.\n\n"
         "Si no solicitaste esta cuenta, ignora este correo."
     )
+
+    if settings.RESEND_API_KEY:
+        payload = {
+            "from": settings.DEFAULT_FROM_EMAIL,
+            "to": [usuario.correo_universitario],
+            "subject": asunto,
+            "text": mensaje,
+            "html": mensaje.replace("\n", "<br>"),
+        }
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib_request.Request(
+            settings.RESEND_API_URL,
+            data=data,
+            headers={
+                "Authorization": f"Bearer {settings.RESEND_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        try:
+            with urllib_request.urlopen(req, timeout=settings.EMAIL_TIMEOUT) as resp:
+                status_code = getattr(resp, "status", 200)
+                if status_code < 200 or status_code >= 300:
+                    body = resp.read().decode("utf-8", errors="replace")
+                    raise RuntimeError(f"Resend API respondio {status_code}: {body}")
+            return
+        except urllib_error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"Resend API HTTPError {exc.code}: {detail}")
+        except urllib_error.URLError as exc:
+            raise RuntimeError(f"Resend API URLError: {exc.reason}")
+
     enviados = send_mail(
         subject=asunto,
         message=mensaje,
