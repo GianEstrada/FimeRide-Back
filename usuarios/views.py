@@ -42,13 +42,15 @@ def _enviar_correo_verificacion(request, usuario):
         "Este enlace expira en 24 horas.\n\n"
         "Si no solicitaste esta cuenta, ignora este correo."
     )
-    send_mail(
+    enviados = send_mail(
         subject=asunto,
         message=mensaje,
         from_email=settings.DEFAULT_FROM_EMAIL,
         recipient_list=[usuario.correo_universitario],
         fail_silently=False,
     )
+    if enviados < 1:
+        raise RuntimeError("No se pudo enviar el correo de verificación")
 
 @api_view(['GET'])
 def obtener_token(request):
