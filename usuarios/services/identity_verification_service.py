@@ -89,22 +89,36 @@ class IdentityVerificationService:
             "response": response,
         }
 
-    def validate_registration_documents(self, matricula, boleta_pdf, credencial_frontal, foto_perfil):
+    def validate_registration_documents(
+        self,
+        matricula,
+        boleta_pdf,
+        foto_perfil,
+        credencial_frontal=None,
+        credencial_digital_pdf=None,
+    ):
         threshold = float(getattr(settings, "REKOGNITION_SIMILARITY_THRESHOLD", 90))
 
         boleta_text, boleta_raw = self._extract_text_pdf_or_image(boleta_pdf)
-        credencial_text, credencial_raw = self._extract_text_image(credencial_frontal)
+        if credencial_frontal is not None:
+            credencial_text, credencial_raw = self._extract_text_image(credencial_frontal)
+            face = self.compare_faces_bytes(
+                source_uploaded_file=credencial_frontal,
+                target_uploaded_file=foto_perfil,
+                threshold=threshold,
+            )
+        else:
+            credencial_text, credencial_raw = self._extract_text_pdf_or_image(credencial_digital_pdf)
+            face = {
+                "match": True,
+                "similarity": Decimal("100"),
+                "response": {"detalle": "Face match omitido por credencial digital en PDF"},
+            }
 
         boleta_pagada = self._contains_paid_ticket_text(boleta_text)
         matricula_en_boleta = self._text_has_matricula(boleta_text, matricula)
         matricula_en_credencial = self._text_has_matricula(credencial_text, matricula)
         matricula_coincide = matricula_en_boleta and matricula_en_credencial
-
-        face = self.compare_faces_bytes(
-            source_uploaded_file=credencial_frontal,
-            target_uploaded_file=foto_perfil,
-            threshold=threshold,
-        )
 
         aprobado = boleta_pagada and matricula_coincide and face["match"]
 
@@ -142,13 +156,20 @@ class IdentityVerificationService:
 identity_verification_service = IdentityVerificationService()
 
 
-def safe_validate_registration(matricula, boleta_pdf, credencial_frontal, foto_perfil):
+def safe_validate_registration(
+    matricula,
+    boleta_pdf,
+    foto_perfil,
+    credencial_frontal=None,
+    credencial_digital_pdf=None,
+):
     try:
         return identity_verification_service.validate_registration_documents(
             matricula=matricula,
             boleta_pdf=boleta_pdf,
-            credencial_frontal=credencial_frontal,
             foto_perfil=foto_perfil,
+            credencial_frontal=credencial_frontal,
+            credencial_digital_pdf=credencial_digital_pdf,
         )
     except (ClientError, BotoCoreError, ValueError) as exc:
         return {

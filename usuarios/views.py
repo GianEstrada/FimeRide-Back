@@ -214,22 +214,24 @@ def registrar_usuario(request):
             if 'foto_perfil' not in request.FILES:
                 return JsonResponse({'error': 'La foto de perfil es obligatoria'}, status=400)
 
-            if 'credencial_frontal' not in request.FILES or 'credencial_trasera' not in request.FILES:
-                return JsonResponse({'error': 'Ambas imágenes de la credencial son obligatorias'}, status=400)
+            credencial_frontal = request.FILES.get('credencial_frontal')
+            credencial_digital_pdf = request.FILES.get('credencial_digital_pdf')
+
+            if not credencial_frontal and not credencial_digital_pdf:
+                return JsonResponse({'error': 'Debes subir foto frontal o credencial digital en PDF'}, status=400)
 
             if 'boleta_rectoria' not in request.FILES:
                 return JsonResponse({'error': 'El archivo boleta_rectoria es obligatorio'}, status=400)
 
             foto_perfil = request.FILES['foto_perfil']
-            credencial_frontal = request.FILES['credencial_frontal']
-            credencial_trasera = request.FILES['credencial_trasera']
             boleta_rectoria = request.FILES['boleta_rectoria']
 
             verificacion_resultado = safe_validate_registration(
                 matricula=data['matricula'],
                 boleta_pdf=boleta_rectoria,
-                credencial_frontal=credencial_frontal,
                 foto_perfil=foto_perfil,
+                credencial_frontal=credencial_frontal,
+                credencial_digital_pdf=credencial_digital_pdf,
             )
 
             if not verificacion_resultado['aprobado']:
@@ -275,20 +277,23 @@ def registrar_usuario(request):
                 },
             )
 
-            DocumentacionPasajero.objects.create(
-                pasajero=pasajero,
-                tipo_documento='credencial_universitaria',
-                documento=credencial_frontal,
-                necesita_autorizacion=True,
-                autorizado=verificacion_resultado['matricula_en_credencial'],
-            )
-            DocumentacionPasajero.objects.create(
-                pasajero=pasajero,
-                tipo_documento='credencial_universitaria',
-                documento=credencial_trasera,
-                necesita_autorizacion=True,
-                autorizado=verificacion_resultado['matricula_en_credencial'],
-            )
+            if credencial_frontal:
+                DocumentacionPasajero.objects.create(
+                    pasajero=pasajero,
+                    tipo_documento='credencial_universitaria',
+                    documento=credencial_frontal,
+                    necesita_autorizacion=True,
+                    autorizado=verificacion_resultado['matricula_en_credencial'],
+                )
+
+            if credencial_digital_pdf:
+                DocumentacionPasajero.objects.create(
+                    pasajero=pasajero,
+                    tipo_documento='credencial_universitaria',
+                    documento=credencial_digital_pdf,
+                    necesita_autorizacion=True,
+                    autorizado=verificacion_resultado['matricula_en_credencial'],
+                )
 
             DocumentacionPasajero.objects.create(
                 pasajero=pasajero,
