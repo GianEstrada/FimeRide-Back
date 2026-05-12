@@ -2,11 +2,12 @@ from xml.etree.ElementInclude import include
 from django.urls import path
 from rest_framework_simplejwt.views import TokenObtainPairView
 
-from .views import accion_viaje_conductor, actualizar_asignacion, actualizar_estado_parada, actualizar_ubicacion_conductor, confirmar_abordo_pasajero, crear_asignacion, crear_reporte, enviar_mensaje, forzar_viaje_en_curso_conductor, forzar_viaje_en_curso_pasajero, obtener_asignaciones_conductor, obtener_chat, obtener_estado_conductor, obtener_info_usuario, obtener_mensajes_activos, obtener_recordatorio_conductor, obtener_recordatorio_pasajero, obtener_token, obtener_viaje_en_curso_conductor, obtener_viaje_en_curso_pasajero, obtener_viajes_realizados_conductor, obtener_viajes_realizados_pasajero, registrar_usuario, registrar_conductor, login_usuario,registrar_viaje,obtener_viajes, solicitar_parada_pasajero
+from .views import actualizar_asignacion, crear_asignacion, enviar_mensaje, login_face_match, obtener_asignaciones_conductor, obtener_chat, obtener_estado_conductor, obtener_info_usuario, obtener_mensajes_activos, obtener_token, obtener_viajes_realizados_conductor, obtener_viajes_realizados_pasajero, registrar_usuario, registrar_conductor, login_usuario,registrar_viaje,obtener_viajes
 from usuarios import views
 
 urlpatterns = [
     path('login/', login_usuario, name='login_usuario'),
+    path('login_face_match/', login_face_match, name='login_face_match'),
     path('registrar/', registrar_usuario, name='registrar_usuario'),
     path('registrar_conductor/', registrar_conductor, name='registrar_conductor'),
     path('token/', TokenObtainPairView.as_view(), name='token_obtain_pair'),  # Cambiado
@@ -17,21 +18,9 @@ urlpatterns = [
     path('asignaciones/', crear_asignacion, name='crear_asignacion'),
     path('asignaciones/conductor/<int:conductor_id>/', obtener_asignaciones_conductor, name='obtener_asignaciones_conductor'),
     path('asignaciones/<int:asignacion_id>/', actualizar_asignacion, name='actualizar_asignacion'),
-    path('asignaciones/<int:asignacion_id>/abordo/', confirmar_abordo_pasajero, name='confirmar_abordo_pasajero'),
-    path('recordatorios/conductor/<int:conductor_id>/', obtener_recordatorio_conductor, name='obtener_recordatorio_conductor'),
-    path('recordatorios/pasajero/<int:pasajero_id>/', obtener_recordatorio_pasajero, name='obtener_recordatorio_pasajero'),
-    path('viajes/<int:viaje_id>/accion_conductor/', accion_viaje_conductor, name='accion_viaje_conductor'),
-    path('viajes/<int:viaje_id>/ubicacion_conductor/', actualizar_ubicacion_conductor, name='actualizar_ubicacion_conductor'),
-    path('viajes/conductor/<int:conductor_id>/en_curso/', obtener_viaje_en_curso_conductor, name='obtener_viaje_en_curso_conductor'),
-    path('viajes/pasajero/<int:pasajero_id>/en_curso/', obtener_viaje_en_curso_pasajero, name='obtener_viaje_en_curso_pasajero'),
-    path('viajes/conductor/<int:conductor_id>/forzar_en_curso/', forzar_viaje_en_curso_conductor, name='forzar_viaje_en_curso_conductor'),
-    path('viajes/pasajero/<int:pasajero_id>/forzar_en_curso/', forzar_viaje_en_curso_pasajero, name='forzar_viaje_en_curso_pasajero'),
     path('usuario/<int:usuario_id>/', obtener_info_usuario, name='obtener_info_usuario'),
     path('viajes_realizados/pasajero/<int:pasajero_id>/', obtener_viajes_realizados_pasajero, name='viajes_realizados_pasajero'),
     path('viajes_realizados/conductor/<int:conductor_id>/', obtener_viajes_realizados_conductor, name='viajes_realizados_conductor'),
-    path('asignaciones/<int:asignacion_id>/solicitar_parada/', solicitar_parada_pasajero, name='solicitar_parada_pasajero'),
-    path('asignaciones/<int:asignacion_id>/estado_parada/', actualizar_estado_parada, name='actualizar_estado_parada'),
-    path('reportes/', crear_reporte, name='crear_reporte'),
     path('mensajes/', enviar_mensaje, name='enviar_mensaje'),
     path('mensajes/<int:usuario_id>/<int:otro_usuario_id>/<int:id_viaje>/', obtener_chat, name='obtener_chat'),
     path('mensajes/<int:usuario_id>/', obtener_mensajes_activos, name='obtener_mensajes_activos'),

@@ -97,27 +97,9 @@ class Viaje(models.Model):
     descripcion = models.TextField()  # Descripción del viaje
     asientos_disponibles = models.PositiveIntegerField()  # Número de asientos disponibles
     costo = models.DecimalField(max_digits=10, decimal_places=2)  # Costo del viaje
-    direccion_inicio = models.CharField(max_length=255, blank=True, default='')
-    direccion_destino = models.CharField(max_length=255, blank=True, default='')
-    origen_lat = models.FloatField(null=True, blank=True)
-    origen_lng = models.FloatField(null=True, blank=True)
-    destino_lat = models.FloatField(null=True, blank=True)
-    destino_lng = models.FloatField(null=True, blank=True)
-    modelo_vehiculo = models.CharField(max_length=120, blank=True, default='')
-    placas_vehiculo = models.CharField(max_length=30, blank=True, default='')
     fecha_viaje = models.DateField()  # Fecha del viaje
     fecha_ofrecido = models.DateTimeField(auto_now_add=True)  # Fecha en la que se ofreció el viaje
     activo = models.BooleanField(default=True)  # Indica si el viaje está activo
-    confirmado_por_conductor = models.BooleanField(default=False)
-    confirmado_en = models.DateTimeField(null=True, blank=True)
-    iniciado = models.BooleanField(default=False)
-    inicio_real = models.DateTimeField(null=True, blank=True)
-    gracia_adicional_hasta = models.DateTimeField(null=True, blank=True)
-    conductor_lat_actual = models.FloatField(null=True, blank=True)
-    conductor_lng_actual = models.FloatField(null=True, blank=True)
-    conductor_ubicacion_actualizada_en = models.DateTimeField(null=True, blank=True)
-    finalizado = models.BooleanField(default=False)
-    finalizado_en = models.DateTimeField(null=True, blank=True)
     conductor = models.ForeignKey(
         UsuarioConductor, on_delete=models.CASCADE, related_name="viajes"
     )  # Relación con el conductor que ofreció el viaje
@@ -132,19 +114,6 @@ class Asignacion(models.Model):
     conductor = models.ForeignKey(UsuarioConductor, on_delete=models.CASCADE, related_name='asignaciones')
     asignado = models.BooleanField(default=False)  # Estado de la asignación
     activo = models.BooleanField(default=True)  # Si la solicitud sigue activa
-    abordo_confirmado = models.BooleanField(default=False)
-    abordo_confirmado_en = models.DateTimeField(null=True, blank=True)
-    destino_lat = models.FloatField(null=True, blank=True)
-    destino_lng = models.FloatField(null=True, blank=True)
-    destino_descripcion = models.CharField(max_length=255, blank=True, default='')
-    parada_solicitada = models.BooleanField(default=False)
-    parada_solicitada_en = models.DateTimeField(null=True, blank=True)
-    parada_objetivo_lat = models.FloatField(null=True, blank=True)
-    parada_objetivo_lng = models.FloatField(null=True, blank=True)
-    parada_referencia_lat = models.FloatField(null=True, blank=True)
-    parada_referencia_lng = models.FloatField(null=True, blank=True)
-    descenso_confirmado = models.BooleanField(default=False)
-    descenso_confirmado_en = models.DateTimeField(null=True, blank=True)
     fecha_creacion = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
@@ -166,16 +135,18 @@ class Mensaje(models.Model):
         return f"Mensaje {self.id} - {self.enviado_por} -> {self.recibido_por}"
 
 
-class Reporte(models.Model):
-    id = models.AutoField(primary_key=True)
-    usuario = models.ForeignKey(Usuario, on_delete=models.CASCADE, related_name='reportes')
-    viaje = models.ForeignKey(Viaje, on_delete=models.CASCADE, related_name='reportes')
-    rol_reportante = models.CharField(max_length=20, default='pasajero')
-    categoria = models.CharField(max_length=60, default='viaje_en_curso')
-    descripcion = models.TextField()
-    canal_preferido = models.CharField(max_length=20, default='correo')
-    estado = models.CharField(max_length=20, default='pendiente')
-    creado_en = models.DateTimeField(auto_now_add=True)
+class VerificacionIdentidad(models.Model):
+    usuario = models.OneToOneField(Usuario, on_delete=models.CASCADE, related_name='verificacion_identidad')
+    boleta_pagada = models.BooleanField(default=False)
+    matricula_en_boleta = models.BooleanField(default=False)
+    matricula_en_credencial = models.BooleanField(default=False)
+    matricula_coincide = models.BooleanField(default=False)
+    face_match_registro = models.BooleanField(default=False)
+    similitud_face_registro = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    registro_aprobado = models.BooleanField(default=False)
+    motivo_rechazo = models.TextField(blank=True)
+    detalle_respuesta = models.JSONField(default=dict, blank=True)
+    fecha_verificacion = models.DateTimeField(default=now)
 
     def __str__(self):
-        return f"Reporte {self.id} - Viaje {self.viaje_id}"
+        return f"Verificacion {self.usuario.matricula} - {'OK' if self.registro_aprobado else 'RECHAZADA'}"
