@@ -103,6 +103,26 @@ class Viaje(models.Model):
     conductor = models.ForeignKey(
         UsuarioConductor, on_delete=models.CASCADE, related_name="viajes"
     )  # Relación con el conductor que ofreció el viaje
+    # Campos agregados por migraciones
+    confirmado_por_conductor = models.BooleanField(default=False)
+    confirmado_en = models.DateTimeField(null=True, blank=True)
+    iniciado = models.BooleanField(default=False)
+    inicio_real = models.DateTimeField(null=True, blank=True)
+    finalizado = models.BooleanField(default=False)
+    finalizado_en = models.DateTimeField(null=True, blank=True)
+    gracia_adicional_hasta = models.DateTimeField(null=True, blank=True)
+    conductor_lat_actual = models.FloatField(null=True, blank=True)
+    conductor_lng_actual = models.FloatField(null=True, blank=True)
+    conductor_ubicacion_actualizada_en = models.DateTimeField(null=True, blank=True)
+    # Campos de ruta y vehículo
+    direccion_inicio = models.CharField(max_length=255, blank=True, default='')
+    direccion_destino = models.CharField(max_length=255, blank=True, default='')
+    origen_lat = models.FloatField(null=True, blank=True)
+    origen_lng = models.FloatField(null=True, blank=True)
+    destino_lat = models.FloatField(null=True, blank=True)
+    destino_lng = models.FloatField(null=True, blank=True)
+    placas_vehiculo = models.CharField(max_length=30, blank=True, default='')
+    modelo_vehiculo = models.CharField(max_length=120, blank=True, default='')
 
     def __str__(self):
         return f"Viaje {self.id} - {self.direccion} ({'Hacia FIME' if self.es_hacia_fime else 'Desde FIME'})"
@@ -115,6 +135,21 @@ class Asignacion(models.Model):
     asignado = models.BooleanField(default=False)  # Estado de la asignación
     activo = models.BooleanField(default=True)  # Si la solicitud sigue activa
     fecha_creacion = models.DateTimeField(auto_now_add=True)
+    # Campos agregados por migraciones
+    abordo_confirmado = models.BooleanField(default=False)
+    abordo_confirmado_en = models.DateTimeField(null=True, blank=True)
+    # Campos de destino (desde 0005_viaje_en_curso_y_paradas)
+    destino_lat = models.FloatField(null=True, blank=True)
+    destino_lng = models.FloatField(null=True, blank=True)
+    destino_descripcion = models.CharField(max_length=255, blank=True, default='')
+    descenso_confirmado = models.BooleanField(default=False)
+    descenso_confirmado_en = models.DateTimeField(null=True, blank=True)
+    parada_solicitada = models.BooleanField(default=False)
+    parada_solicitada_en = models.DateTimeField(null=True, blank=True)
+    parada_objetivo_lat = models.FloatField(null=True, blank=True)
+    parada_objetivo_lng = models.FloatField(null=True, blank=True)
+    parada_referencia_lat = models.FloatField(null=True, blank=True)
+    parada_referencia_lng = models.FloatField(null=True, blank=True)
 
     def __str__(self):
         return f"Asignación {self.id} - Pasajero {self.pasajero.usuario.nombre_completo}"
